@@ -37,8 +37,6 @@
 #define TEXT_LAYER_MAX_LARGE_CHARACTERS 5
 #define MSEC_IN_SEC 1000
 
-
-
 /*******************************************************************************
  * STRUCTURE DEFINITION
  */
@@ -53,7 +51,7 @@ struct DetailWindow {
   TextLayer   *main_text; //< main, larger text
   TextLayer   *sub_text;  //< footer, small text
   ActionBarLayer *action; //< action bar
-  GBitmap     *edit_icon, *play_icon, *pause_icon, *delete_icon;  //< icons
+  GBitmap     *edit_icon, *play_icon, *pause_icon, *delete_icon, *dismiss_icon;  //< icons
   GFont       large_font, medium_font, small_font; //< fonts
   GColor      highlight_color;        //< main color for highlights
   StatusBarLayer *status;             //< status bar for SDK 3
@@ -65,9 +63,10 @@ struct DetailWindow {
   bool        animation_update_needed;    //< whether it needs to be refreshed
 
   CountdownTimer *countdown_timer;        //< the CountdownTimer being shown
+
+  bool        delete_armed;               //< whether delete needs confirmation
+  AppTimer   *delete_arm_timer;           //< timer to clear confirmation state
 };
-
-
 
 /*******************************************************************************
  * PRIVATE FUNCTIONS
@@ -112,6 +111,57 @@ static int64_t prv_round_up_to_next_second(int64_t value) {
  * CALLBACKS
  */
 
+static void prv_update_action_icons(DetailWindow *detail_window) {
+  if (!detail_window || !detail_window->action) {
+    return;
+  }
+
+  if (detail_window->delete_armed) {
+    // Confirmation mode: confirm on UP, cancel on DOWN, disable SELECT.
+    action_bar_layer_set_icon(detail_window->action, BUTTON_ID_UP,
+                              detail_window->delete_icon);
+    action_bar_layer_set_icon(detail_window->action, BUTTON_ID_SELECT, NULL);
+    action_bar_layer_set_icon(detail_window->action, BUTTON_ID_DOWN,
+                              detail_window->dismiss_icon);
+    return;
+  }
+
+  // Normal mode.
+  action_bar_layer_set_icon(detail_window->action, BUTTON_ID_UP,
+                            detail_window->edit_icon);
+  action_bar_layer_set_icon(detail_window->action, BUTTON_ID_SELECT,
+                            (detail_window->countdown_timer &&
+                             countdown_timer_get_paused(detail_window->countdown_timer))
+                                ? detail_window->play_icon
+                                : detail_window->pause_icon);
+  action_bar_layer_set_icon(detail_window->action, BUTTON_ID_DOWN,
+                            detail_window->delete_icon);
+}
+
+static void prv_disarm_delete(DetailWindow *detail_window, bool refresh) {
+  if (!detail_window) {
+    return;
+  }
+  detail_window->delete_armed = false;
+  if (detail_window->delete_arm_timer) {
+    app_timer_cancel(detail_window->delete_arm_timer);
+    detail_window->delete_arm_timer = NULL;
+  }
+  if (refresh) {
+    prv_update_action_icons(detail_window);
+    detail_window_refresh(detail_window);
+  }
+}
+
+static void prv_delete_arm_timer_callback(void *context) {
+  DetailWindow *detail_window = (DetailWindow *)context;
+  if (!detail_window) {
+    return;
+  }
+  detail_window->delete_arm_timer = NULL;
+  prv_disarm_delete(detail_window, true);
+}
+
 /*
  * UP click handler callback
  *
@@ -120,10 +170,16 @@ static int64_t prv_round_up_to_next_second(int64_t value) {
 
 static void up_click_handler(ClickRecognizerRef recognizer, void *context) {
   DetailWindow *detail_window = (DetailWindow*)context;
+  if (detail_window && detail_window->delete_armed) {
+    // confirmed: proceed with delete
+    prv_disarm_delete(detail_window, false);
+    prv_update_action_icons(detail_window);
+    return detail_window->callbacks.delete_timer(detail_window->countdown_timer, context);
+  }
+
+  prv_disarm_delete(detail_window, false);
   return detail_window->callbacks.edit_timer(detail_window->countdown_timer, context);
 }
-
-
 
 /*
  * SELECT click handler callback
@@ -133,10 +189,14 @@ static void up_click_handler(ClickRecognizerRef recognizer, void *context) {
 
 static void select_click_handler(ClickRecognizerRef recognizer, void *context) {
   DetailWindow *detail_window = (DetailWindow*)context;
+  if (detail_window && detail_window->delete_armed) {
+    // ignore SELECT during confirmation
+    return;
+  }
+
+  prv_disarm_delete(detail_window, false);
   return detail_window->callbacks.playpause_timer(detail_window->countdown_timer, context);
 }
-
-
 
 /*
  * DOWN click handler callback
@@ -146,10 +206,27 @@ static void select_click_handler(ClickRecognizerRef recognizer, void *context) {
 
 static void down_click_handler(ClickRecognizerRef recognizer, void *context) {
   DetailWindow *detail_window = (DetailWindow*)context;
-  return detail_window->callbacks.delete_timer(detail_window->countdown_timer, context);
+  if (!detail_window || !detail_window->countdown_timer) {
+    return;
+  }
+
+  if (detail_window->delete_armed) {
+    // cancel confirmation
+    prv_disarm_delete(detail_window, true);
+    return;
+  }
+
+  // arm delete confirmation
+  detail_window->delete_armed = true;
+  if (detail_window->delete_arm_timer) {
+    app_timer_cancel(detail_window->delete_arm_timer);
+    detail_window->delete_arm_timer = NULL;
+  }
+  detail_window->delete_arm_timer = app_timer_register(2500, prv_delete_arm_timer_callback,
+                                                       detail_window);
+  prv_update_action_icons(detail_window);
+  detail_window_refresh(detail_window);
 }
-
-
 
 /*
  * click configuration provider
@@ -175,27 +252,28 @@ static void prv_window_load(Window* window){
   window_set_background_color(detail_window->window, GColorLightGray);
 
   // load resources
+  detail_window->dismiss_icon = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_DISMISS);
   detail_window->edit_icon = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_EDIT);
   detail_window->play_icon = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_PLAY);
   detail_window->pause_icon = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_PAUSE);
   detail_window->delete_icon = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_DELETE);
-  #if defined(PBL_PLATFORM_EMERY) || defined(PBL_PLATFORM_GABBRO)
-      detail_window->large_font = fonts_load_custom_font(
-          resource_get_handle(RESOURCE_ID_FONT_LECO_REGULAR_SUBSET_48));
-      detail_window->medium_font = fonts_load_custom_font(
-          resource_get_handle(RESOURCE_ID_FONT_LECO_REGULAR_SUBSET_36));
-      detail_window->small_font = fonts_load_custom_font(
-          resource_get_handle(RESOURCE_ID_FONT_LECO_REGULAR_SUBSET_26));
-      uint8_t text_sizes[] = {52, 40, 30};
- #else
-      detail_window->large_font = fonts_load_custom_font(
-          resource_get_handle(RESOURCE_ID_FONT_LECO_REGULAR_SUBSET_36));
-      detail_window->medium_font = fonts_load_custom_font(
-          resource_get_handle(RESOURCE_ID_FONT_LECO_REGULAR_SUBSET_26));
-      detail_window->small_font = fonts_load_custom_font(
-          resource_get_handle(RESOURCE_ID_FONT_LECO_REGULAR_SUBSET_20));
-      uint8_t text_sizes[] = {40, 30, 24};
- #endif
+#if defined(PBL_PLATFORM_EMERY) || defined(PBL_PLATFORM_GABBRO)
+  detail_window->large_font = fonts_load_custom_font(
+      resource_get_handle(RESOURCE_ID_FONT_LECO_REGULAR_SUBSET_48));
+  detail_window->medium_font = fonts_load_custom_font(
+      resource_get_handle(RESOURCE_ID_FONT_LECO_REGULAR_SUBSET_36));
+  detail_window->small_font = fonts_load_custom_font(
+      resource_get_handle(RESOURCE_ID_FONT_LECO_REGULAR_SUBSET_26));
+  uint8_t text_sizes[] = {52, 40, 30};
+#else
+  detail_window->large_font = fonts_load_custom_font(
+      resource_get_handle(RESOURCE_ID_FONT_LECO_REGULAR_SUBSET_36));
+  detail_window->medium_font = fonts_load_custom_font(
+      resource_get_handle(RESOURCE_ID_FONT_LECO_REGULAR_SUBSET_26));
+  detail_window->small_font = fonts_load_custom_font(
+      resource_get_handle(RESOURCE_ID_FONT_LECO_REGULAR_SUBSET_20));
+  uint8_t text_sizes[] = {40, 30, 24};
+#endif
   // get window parameters
   Layer *root = window_get_root_layer(detail_window->window);
   GRect bounds = layer_get_frame(root);
@@ -210,10 +288,11 @@ static void prv_window_load(Window* window){
   // create main text
 #ifdef PBL_ROUND
   detail_window->main_text = text_layer_create(
-    GRect(0, bounds.size.h/2-text_sizes[0]/2, bounds.size.w - ACTION_BAR_WIDTH, text_sizes[0]));
+    GRect(0, bounds.size.h / 2 - text_sizes[0] / 2, bounds.size.w - ACTION_BAR_WIDTH,
+          text_sizes[0]));
 #else
   detail_window->main_text = text_layer_create(
-    GRect(0, bounds.size.h*2 / 17, bounds.size.w - ACTION_BAR_WIDTH, text_sizes[0]));
+    GRect(0, bounds.size.h * 2 / 17, bounds.size.w - ACTION_BAR_WIDTH, text_sizes[0]));
 #endif
   text_layer_set_font(detail_window->main_text, detail_window->large_font);
   text_layer_set_text(detail_window->main_text, "00:00");
@@ -223,12 +302,13 @@ static void prv_window_load(Window* window){
   // create sub text
 #ifdef PBL_ROUND
   detail_window->sub_text = text_layer_create(
-    GRect(0, bounds.size.h-text_sizes[2]-11, bounds.size.w, text_sizes[2]));
-    text_layer_set_text_alignment(detail_window->sub_text, GTextAlignmentCenter);
+    GRect(0, bounds.size.h - text_sizes[2] - 11, bounds.size.w, text_sizes[2]));
+  text_layer_set_text_alignment(detail_window->sub_text, GTextAlignmentCenter);
 #else
   detail_window->sub_text = text_layer_create(
-    GRect(10, bounds.size.h-text_sizes[2]-6, bounds.size.w - ACTION_BAR_WIDTH, text_sizes[2]));
-    text_layer_set_text_alignment(detail_window->sub_text, GTextAlignmentLeft);
+    GRect(10, bounds.size.h - text_sizes[2] - 6, bounds.size.w - ACTION_BAR_WIDTH,
+          text_sizes[2]));
+  text_layer_set_text_alignment(detail_window->sub_text, GTextAlignmentLeft);
 #endif
   text_layer_set_font(detail_window->sub_text, detail_window->small_font);
   text_layer_set_text(detail_window->sub_text, "00:00");
@@ -239,9 +319,7 @@ static void prv_window_load(Window* window){
   action_bar_layer_add_to_window(detail_window->action, detail_window->window);
   action_bar_layer_set_click_config_provider(detail_window->action, click_config_provider);
   action_bar_layer_set_context(detail_window->action, detail_window);
-  action_bar_layer_set_icon(detail_window->action, BUTTON_ID_UP, detail_window->edit_icon);
-  action_bar_layer_set_icon(detail_window->action, BUTTON_ID_SELECT, detail_window->pause_icon);
-  action_bar_layer_set_icon(detail_window->action, BUTTON_ID_DOWN, detail_window->delete_icon);
+  prv_update_action_icons(detail_window);
   // create status bar
 #ifdef PBL_ROUND
   int16_t horiz_off = 0;
@@ -257,12 +335,14 @@ static void prv_window_load(Window* window){
 
 static void prv_window_unload(Window* window){
   DetailWindow *detail_window = window_get_user_data(window);
+  prv_disarm_delete(detail_window, false);
   status_bar_layer_destroy(detail_window->status);
   action_bar_layer_destroy(detail_window->action);
   text_layer_destroy(detail_window->sub_text);
   text_layer_destroy(detail_window->main_text);
   layer_destroy(detail_window->layer);
   window_destroy(detail_window->window);
+  gbitmap_destroy(detail_window->dismiss_icon);
   gbitmap_destroy(detail_window->edit_icon);
   gbitmap_destroy(detail_window->play_icon);
   gbitmap_destroy(detail_window->pause_icon);
@@ -272,7 +352,6 @@ static void prv_window_unload(Window* window){
   fonts_unload_custom_font(detail_window->small_font);
   detail_window->window = NULL;
 }
-
 
 /*
  * create a new DetailWindow and return a pointer to it
@@ -287,12 +366,14 @@ DetailWindow *detail_window_create(DetailWindowCallbacks detail_window_callbacks
     return NULL;
   }
 
-  *detail_window = (DetailWindow) { .callbacks = detail_window_callbacks };
-  
+  *detail_window = (DetailWindow) {
+    .callbacks = detail_window_callbacks,
+    .delete_armed = false,
+    .delete_arm_timer = NULL,
+  };
+
   return detail_window;
 }
-
-
 
 /*
  * destroy a previously created DetailWindow
@@ -305,8 +386,6 @@ void detail_window_destroy(DetailWindow *detail_window) {
     return;
   }
 }
-
-
 
 /*
  * push the window onto the stack
@@ -327,8 +406,6 @@ void detail_window_push(DetailWindow *detail_window, bool animated) {
   }
 }
 
-
-
 /*
  * pop the window off the stack
  */
@@ -339,8 +416,6 @@ void detail_window_pop(DetailWindow *detail_window, bool animated) {
   }
 }
 
-
-
 /*
  * gets whether it is the topmost window on the stack
  */
@@ -349,8 +424,6 @@ bool detail_window_get_topmost_window(DetailWindow *detail_window) {
   return window_stack_get_top_window() == detail_window->window;
 }
 
-
-
 /*
  * set the timer associated with the window
  */
@@ -358,9 +431,9 @@ bool detail_window_get_topmost_window(DetailWindow *detail_window) {
 void detail_window_set_countdown_timer(DetailWindow *detail_window,
                                        CountdownTimer *countdown_timer) {
   detail_window->countdown_timer = countdown_timer;
+  prv_disarm_delete(detail_window, true);
+  prv_update_action_icons(detail_window);
 }
-
-
 
 /*
  * refresh the provided DetailWindow
@@ -372,6 +445,11 @@ void detail_window_refresh(DetailWindow *detail_window) {
   }
 
   layer_mark_dirty(detail_window->layer);
+  if (detail_window->countdown_timer == NULL) {
+    text_layer_set_text(detail_window->main_text, "00:00");
+    text_layer_set_text(detail_window->sub_text, "");
+    return;
+  }
   // main text
   countdown_timer_format_text(
     prv_round_up_to_next_second(countdown_timer_get_display_time(detail_window->countdown_timer)),
@@ -383,12 +461,18 @@ void detail_window_refresh(DetailWindow *detail_window) {
     text_layer_set_font(detail_window->main_text, detail_window->large_font);
   }
   // sub text
-  countdown_timer_format_text(countdown_timer_get_duration(detail_window->countdown_timer),
-    detail_window->sub_buff, sizeof(detail_window->sub_buff));
-  text_layer_set_text(detail_window->sub_text, detail_window->sub_buff);
+  if (detail_window->delete_armed) {
+    // Use a built-in system font so glyphs (e.g. '?') are always present.
+    text_layer_set_font(detail_window->sub_text,
+                        fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
+    text_layer_set_text(detail_window->sub_text, "Delete?");
+  } else {
+    countdown_timer_format_text(countdown_timer_get_duration(detail_window->countdown_timer),
+      detail_window->sub_buff, sizeof(detail_window->sub_buff));
+    text_layer_set_font(detail_window->sub_text, detail_window->small_font);
+    text_layer_set_text(detail_window->sub_text, detail_window->sub_buff);
+  }
 }
-
-
 
 /*
  * deep refresh the window, updating icons etc.
@@ -396,26 +480,21 @@ void detail_window_refresh(DetailWindow *detail_window) {
 
 void detail_window_deep_refresh(DetailWindow *detail_window) {
   if (detail_window->window != NULL && detail_window->countdown_timer != NULL) {
-    action_bar_layer_set_icon(detail_window->action, BUTTON_ID_SELECT,
-      countdown_timer_get_paused(detail_window->countdown_timer) ?
-      detail_window->play_icon : detail_window->pause_icon);
+    prv_update_action_icons(detail_window);
     detail_window_refresh(detail_window);
     return;
   }
 }
-
-
 
 /*
  * set highlight color of this window
  * this is the overall color scheme used
  */
 
-void detail_window_set_highlight_color(DetailWindow *detail_window, GColor color) {
+void detail_window_set_highlight_color(DetailWindow *detail_window,
+                                       GColor color) {
   detail_window->highlight_color = color;
 }
-
-
 
 /*
  * gets whether it needs to be updated for the animations
@@ -424,5 +503,5 @@ void detail_window_set_highlight_color(DetailWindow *detail_window, GColor color
 bool detail_window_get_update_needed(DetailWindow *detail_window) {
   if (detail_window->countdown_timer == NULL) return false;
   return detail_window->animation_update_needed ||
-    !countdown_timer_get_paused(detail_window->countdown_timer);
+         !countdown_timer_get_paused(detail_window->countdown_timer);
 }
