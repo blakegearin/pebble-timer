@@ -33,7 +33,8 @@
  *      void            countdown_timer_list_save(CountdownTimer **timer_array,
  *                          uint8_t timer_array_count, uint32_t key);
  *      void            countdown_timer_list_load(CountdownTimer **timer_array,
- *                          uint8_t *timer_array_count, uint32_t key);
+ *                          uint8_t timer_array_max, uint8_t *timer_array_count,
+ *                          uint32_t key);
  *      bool            countdown_timer_get_paused(CountdownTimer
  *                          *countdown_timer);
  *      int64_t         countdown_timer_get_start(CountdownTimer
@@ -288,8 +289,8 @@ void countdown_timer_list_save(CountdownTimer **timer_array, uint8_t timer_array
  * this also creates memory for the timers
  */
 
-void countdown_timer_list_load(CountdownTimer **timer_array, uint8_t *timer_array_count,
-                               uint32_t key);
+void countdown_timer_list_load(CountdownTimer **timer_array, uint8_t timer_array_max,
+                               uint8_t *timer_array_count, uint32_t key);
 
 
 

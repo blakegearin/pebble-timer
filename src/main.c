@@ -406,8 +406,8 @@ static void initialize(void) {
   phone_connect();
   // load the CountdownTimer data
   if (persist_exists(COUNTDOWN_TIMER_PERSIST_KEY)) {
-    countdown_timer_list_load(s_countdown_timers, &s_countdown_timers_count,
-      COUNTDOWN_TIMER_PERSIST_KEY);
+    countdown_timer_list_load(s_countdown_timers, COUNTDOWN_TIMERS_MAX,
+      &s_countdown_timers_count, COUNTDOWN_TIMER_PERSIST_KEY);
   }
   if (persist_exists(COUNTDOWN_TIMER_ID_PERSIST_KEY)) {
     s_countdown_timer_id_max = persist_read_int(COUNTDOWN_TIMER_ID_PERSIST_KEY);
