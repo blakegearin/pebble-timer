@@ -177,17 +177,12 @@ void countdown_timer_stop(CountdownTimer *countdown_timer, int32_t *current_id_m
 
 void countdown_timer_update(CountdownTimer *countdown_timer, int64_t duration,
     bool update_duration) {
-  bool expired = countdown_timer->start_ms == COUNTDOWN_TIMER_EXPIRED;
   if (countdown_timer->duration_ms < duration || update_duration) {
     countdown_timer->duration_ms = duration;
   }
   int64_t now = countdown_timer_get_epoch_ms();
-  if (countdown_timer->paused && expired) {
-    countdown_timer->start_ms = 0;
-  } else {
-    countdown_timer->start_ms = ((countdown_timer->paused) ? 0 : now)
-      + duration - countdown_timer->duration_ms;
-  }
+  countdown_timer->start_ms = ((countdown_timer->paused) ? 0 : now)
+    + duration - countdown_timer->duration_ms;
   countdown_timer->last_update = time(NULL);
 }
 
@@ -398,17 +393,46 @@ void countdown_timer_list_save(CountdownTimer **timer_array, uint8_t timer_array
  * loads all timers from persistent storage
  */
 
-void countdown_timer_list_load(CountdownTimer **timer_array, uint8_t *timer_array_count,
-                               uint32_t key) {
-  (*timer_array_count) = persist_read_int(key++);
-  for (uint8_t ii = 0; ii < (*timer_array_count); ii++) {
-    timer_array[ii] = (CountdownTimer*)malloc(sizeof(CountdownTimer));
-    if (timer_array[ii]) {
-      persist_read_data(key++, timer_array[ii], sizeof(CountdownTimer));
-    } else {
+void countdown_timer_list_load(CountdownTimer **timer_array, uint8_t timer_array_max,
+                               uint8_t *timer_array_count, uint32_t key) {
+  (*timer_array_count) = 0;
+  int32_t stored_count = persist_read_int(key++);
+  // Reject a corrupt or foreign-format count (e.g. data left behind by a
+  // different/older build that reuses this UUID). Loading more than the array
+  // can hold would overflow timer_array.
+  if (stored_count < 0 || stored_count > timer_array_max) {
+    APP_LOG(APP_LOG_LEVEL_WARNING, "Ignoring persisted timers: bad count %d", (int)stored_count);
+    return;
+  }
+  for (int32_t ii = 0; ii < stored_count; ii++, key++) {
+    // Reject blobs that weren't written by this exact CountdownTimer layout.
+    // A size mismatch means the persisted data came from a different struct
+    // (an older app or the Rebble-store build) and would otherwise be read as
+    // garbage, producing the nonsense "IP-like" timer values.
+    if (!persist_exists(key) || persist_get_size(key) != (int)sizeof(CountdownTimer)) {
+      APP_LOG(APP_LOG_LEVEL_WARNING, "Ignoring persisted timers: incompatible blob size");
+      countdown_timer_list_destroy_all(timer_array, timer_array_count);
+      return;
+    }
+    CountdownTimer *timer = (CountdownTimer*)malloc(sizeof(CountdownTimer));
+    if (!timer) {
       APP_LOG(APP_LOG_LEVEL_ERROR, "Failed to allocate memory while loading timers!");
       return;
     }
+    persist_read_data(key, timer, sizeof(CountdownTimer));
+    // Reject blobs whose contents are nonsensical even though the size matched
+    // (e.g. same-sized foreign data). A zero/negative duration would later
+    // divide by zero when drawing the menu progress bar, and the expired
+    // sentinel must only ever appear on a paused timer.
+    bool valid_duration = timer->duration_ms > 0;
+    bool valid_expired = timer->start_ms != COUNTDOWN_TIMER_EXPIRED || timer->paused;
+    if (!valid_duration || !valid_expired) {
+      APP_LOG(APP_LOG_LEVEL_WARNING, "Ignoring persisted timers: invalid timer contents");
+      free(timer);
+      countdown_timer_list_destroy_all(timer_array, timer_array_count);
+      return;
+    }
+    timer_array[(*timer_array_count)++] = timer;
   }
 }
 
