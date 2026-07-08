@@ -485,6 +485,22 @@ int64_t countdown_timer_get_current_time(CountdownTimer *countdown_timer) {
 
 
 /*
+ * gets the time to display for the CountdownTimer in milliseconds
+ *
+ * an expired timer displays its total duration rather than zero,
+ * matching how it looked before it was started
+ */
+
+int64_t countdown_timer_get_display_time(CountdownTimer *countdown_timer) {
+  if (countdown_timer->start_ms == COUNTDOWN_TIMER_EXPIRED) {
+    return countdown_timer->duration_ms;
+  }
+  return countdown_timer_get_current_time(countdown_timer);
+}
+
+
+
+/*
  * gives the CountdownTimer a random new id
  */
 
@@ -550,9 +566,8 @@ void countdown_timer_format_text(int64_t value, char *buff, uint8_t size) {
  */
 
 char *countdown_timer_format_own_buff(CountdownTimer *countdown_timer) {
-  int64_t value = countdown_timer->start_ms == COUNTDOWN_TIMER_EXPIRED ?
-    countdown_timer->duration_ms : countdown_timer_get_current_time(countdown_timer);
-  countdown_timer_format_text(value, countdown_timer->buff, sizeof(countdown_timer->buff));
+  countdown_timer_format_text(countdown_timer_get_display_time(countdown_timer),
+    countdown_timer->buff, sizeof(countdown_timer->buff));
   return countdown_timer->buff;
 }
 

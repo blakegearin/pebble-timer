@@ -331,6 +331,19 @@ int64_t countdown_timer_get_current_time(CountdownTimer *countdown_timer);
 
 
 /*
+ * Function:    countdown_timer_get_display_time
+ * ---------------------------------------------
+ * gets the CountdownTimer time to display in milliseconds
+ * an expired timer displays its total duration rather than zero
+ *
+ *  countdown_timer: the CountdownTimer to get the display time of
+ */
+
+int64_t countdown_timer_get_display_time(CountdownTimer *countdown_timer);
+
+
+
+/*
  * Function:    countdown_timer_rand_id
  * ------------------------------------
  * creates a random ID for the CountdownTimer

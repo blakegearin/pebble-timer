@@ -81,7 +81,7 @@ struct DetailWindow {
 static void layer_update_proc(Layer *layer, GContext *ctx) {
   // get DetailWindow pointer from layer data
   DetailWindow *detail_window = (*(DetailWindow**)layer_get_data(layer));
-  int64_t current_time = countdown_timer_get_current_time(detail_window->countdown_timer);
+  int64_t current_time = countdown_timer_get_display_time(detail_window->countdown_timer);
   int64_t total_time = countdown_timer_get_duration(detail_window->countdown_timer);
   if (total_time <= 0) {
     return;
@@ -374,7 +374,7 @@ void detail_window_refresh(DetailWindow *detail_window) {
   layer_mark_dirty(detail_window->layer);
   // main text
   countdown_timer_format_text(
-    prv_round_up_to_next_second(countdown_timer_get_current_time(detail_window->countdown_timer)),
+    prv_round_up_to_next_second(countdown_timer_get_display_time(detail_window->countdown_timer)),
     detail_window->main_buff, sizeof(detail_window->main_buff));
   text_layer_set_text(detail_window->main_text, detail_window->main_buff);
   if (strlen(detail_window->main_buff) > TEXT_LAYER_MAX_LARGE_CHARACTERS) {
