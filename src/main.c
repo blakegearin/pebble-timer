@@ -80,6 +80,69 @@ static uint16_t prv_get_next_refresh_delay(void) {
 
 
 
+/*
+ * decides whether timer "a" should be listed above timer "b"
+ *
+ * running timers come before paused ones; within each group the most recently
+ * used timer (largest last_update) comes first. "Used" means started, paused,
+ * or edited -- anything that touches a timer's last_update.
+ */
+
+static bool prv_timer_precedes(CountdownTimer *a, CountdownTimer *b) {
+  bool a_running = !countdown_timer_get_paused(a);
+  bool b_running = !countdown_timer_get_paused(b);
+  if (a_running != b_running) {
+    return a_running;
+  }
+  return countdown_timer_get_last_update(a) > countdown_timer_get_last_update(b);
+}
+
+
+
+/*
+ * sort the timer list: running timers on top (most recently used first), then
+ * paused timers (most recently used first)
+ *
+ * insertion sort is fine here: the list holds at most COUNTDOWN_TIMERS_MAX
+ * entries.
+ */
+
+static void prv_sort_timers_by_recency(void) {
+  for (uint8_t i = 1; i < s_countdown_timers_count; i++) {
+    CountdownTimer *key = s_countdown_timers[i];
+    int16_t j = (int16_t)i - 1;
+    while (j >= 0 && prv_timer_precedes(key, s_countdown_timers[j])) {
+      s_countdown_timers[j + 1] = s_countdown_timers[j];
+      j--;
+    }
+    s_countdown_timers[j + 1] = key;
+  }
+}
+
+
+
+/*
+ * promote a just-used timer to the top of its group
+ *
+ * last_update only has one-second resolution, so several timers touched in the
+ * same second compare equal. Moving the touched timer to the front of the array
+ * first means the stable sort keeps it ahead of those same-second peers, so the
+ * timer the user actually just used ends up on top of its running/paused group.
+ */
+
+static void prv_promote_timer(CountdownTimer *countdown_timer) {
+  int16_t index = countdown_timer_list_get_timer_index(s_countdown_timers,
+    s_countdown_timers_count, countdown_timer);
+  if (index > 0) {
+    memmove(&s_countdown_timers[1], &s_countdown_timers[0],
+      sizeof(CountdownTimer*) * index);
+    s_countdown_timers[0] = countdown_timer;
+  }
+  prv_sort_timers_by_recency();
+}
+
+
+
 /*******************************************************************************
  * CALLBACKS
  */
@@ -98,6 +161,9 @@ static void app_timer_callback(void *data) {
     s_countdown_timers_count);
 
   if (countdown_timer != NULL) {
+    // a timer just expired and is now paused; re-sort so it drops below any
+    // still-running timers
+    prv_sort_timers_by_recency();
     // deep refresh the DetailWindow in case it was that timer
     detail_window_deep_refresh(s_detail_window);
     // show timer confirmation window
@@ -154,6 +220,7 @@ static void app_timer_callback(void *data) {
 static void popup_window_snooze_timer_callback(CountdownTimer *countdown_timer, void *context) {
   countdown_timer_update(countdown_timer, COUNTDOWN_TIMER_SNOOZE_DELAY, false);
   countdown_timer_start(countdown_timer);
+  prv_promote_timer(countdown_timer);
   popup_window_pop(s_popup_window, true);
   // show detail if not on top
   if (!detail_window_get_topmost_window(s_detail_window)) {
@@ -230,6 +297,9 @@ static void setting_window_complete_callback(int64_t duration, void *context) {
     }
   }
 
+  // float the just-used timer to the top of the list
+  prv_promote_timer(countdown_timer);
+
   // refresh now
   if (s_app_timer != NULL) {
     app_timer_reschedule(s_app_timer, MIN_REFRESH_DELAY);
@@ -281,6 +351,8 @@ static void detail_window_playpause_timer_callback(CountdownTimer *countdown_tim
     // stop the timer
     countdown_timer_stop(countdown_timer, &s_countdown_timer_id_max);
   }
+  // float the just-used timer to the top of the list
+  prv_promote_timer(countdown_timer);
   // refresh DetailWindow
   detail_window_deep_refresh(s_detail_window);
 
@@ -412,6 +484,8 @@ static void initialize(void) {
   if (persist_exists(COUNTDOWN_TIMER_ID_PERSIST_KEY)) {
     s_countdown_timer_id_max = persist_read_int(COUNTDOWN_TIMER_ID_PERSIST_KEY);
   }
+  // open the restored list with the most recently used timer on top
+  prv_sort_timers_by_recency();
   // cancel wakeup
   wakeup_cancel_all();
 
