@@ -33,7 +33,8 @@
  *      void            countdown_timer_list_save(CountdownTimer **timer_array,
  *                          uint8_t timer_array_count, uint32_t key);
  *      void            countdown_timer_list_load(CountdownTimer **timer_array,
- *                          uint8_t *timer_array_count, uint32_t key);
+ *                          uint8_t timer_array_max, uint8_t *timer_array_count,
+ *                          uint32_t key);
  *      bool            countdown_timer_get_paused(CountdownTimer
  *                          *countdown_timer);
  *      int64_t         countdown_timer_get_start(CountdownTimer
@@ -288,8 +289,8 @@ void countdown_timer_list_save(CountdownTimer **timer_array, uint8_t timer_array
  * this also creates memory for the timers
  */
 
-void countdown_timer_list_load(CountdownTimer **timer_array, uint8_t *timer_array_count,
-                               uint32_t key);
+void countdown_timer_list_load(CountdownTimer **timer_array, uint8_t timer_array_max,
+                               uint8_t *timer_array_count, uint32_t key);
 
 
 
@@ -326,6 +327,19 @@ int64_t countdown_timer_get_start(CountdownTimer *countdown_timer);
  */
 
 int64_t countdown_timer_get_current_time(CountdownTimer *countdown_timer);
+
+
+
+/*
+ * Function:    countdown_timer_get_display_time
+ * ---------------------------------------------
+ * gets the CountdownTimer time to display in milliseconds
+ * an expired timer displays its total duration rather than zero
+ *
+ *  countdown_timer: the CountdownTimer to get the display time of
+ */
+
+int64_t countdown_timer_get_display_time(CountdownTimer *countdown_timer);
 
 
 

@@ -29,6 +29,10 @@
 #define TIMER_SORT_MODE_PERSIST_KEY 9938472
 #define INACTIVITY_THRESHOLD 900000 // length of time before refresh throttling in milliseconds
 #define INACTIVE_REFRESH_DELAY 1000 // ms between frames after throttling
+#define REFRESH_DELAY 1000 // ms between periodic redraws
+#define POPUP_REFRESH_DELAY 35 // ms between popup animation frames
+#define REFRESH_ALIGNMENT_DELAY 5 // ms after a second boundary to refresh
+#define MIN_REFRESH_DELAY 25 // minimum delay when correcting near a boundary
 #define PIN_ACTION_CODE_TRUNCATION_LEVEL 100 // both the pin id and action code have to be stored
                                              // in the pins action code
 #define PIN_LAUNCH_ARGS_OPEN 10 // when opened from pin, action code to open timer in detail view
@@ -74,6 +78,101 @@ static void rebuild_timer_view_indices(void) {
   }
 }
 
+static uint16_t prv_get_next_refresh_delay(void) {
+  if (popup_window_get_topmost_window(s_popup_window)) {
+    return POPUP_REFRESH_DELAY;
+  }
+
+  CountdownTimer *next_timer = countdown_timer_list_get_closest_timer(s_countdown_timers,
+    s_countdown_timers_count);
+  if (next_timer == NULL) {
+    return REFRESH_DELAY;
+  }
+
+  int64_t remaining = countdown_timer_get_current_time(next_timer);
+  if (remaining <= 0) {
+    return MIN_REFRESH_DELAY;
+  }
+
+  int64_t delay = remaining % REFRESH_DELAY;
+  if (delay == 0) {
+    delay = REFRESH_DELAY;
+  }
+  delay += REFRESH_ALIGNMENT_DELAY;
+  if (delay < MIN_REFRESH_DELAY) {
+    delay = MIN_REFRESH_DELAY;
+  }
+  return (uint16_t)delay;
+}
+
+
+
+/*
+ * decides whether timer "a" should be listed above timer "b"
+ *
+ * running timers come before paused ones; within each group the most recently
+ * used timer (largest last_update) comes first. "Used" means started, paused,
+ * or edited -- anything that touches a timer's last_update.
+ */
+
+static bool prv_timer_precedes(CountdownTimer *a, CountdownTimer *b) {
+  bool a_running = !countdown_timer_get_paused(a);
+  bool b_running = !countdown_timer_get_paused(b);
+  if (a_running != b_running) {
+    return a_running;
+  }
+  return countdown_timer_get_last_update(a) > countdown_timer_get_last_update(b);
+}
+
+
+
+/*
+ * sort the timer list: running timers on top (most recently used first), then
+ * paused timers (most recently used first)
+ *
+ * insertion sort is fine here: the list holds at most COUNTDOWN_TIMERS_MAX
+ * entries.
+ */
+
+static void prv_sort_timers_by_recency(void) {
+  for (uint8_t i = 1; i < s_countdown_timers_count; i++) {
+    CountdownTimer *key = s_countdown_timers[i];
+    int16_t j = (int16_t)i - 1;
+    while (j >= 0 && prv_timer_precedes(key, s_countdown_timers[j])) {
+      s_countdown_timers[j + 1] = s_countdown_timers[j];
+      j--;
+    }
+    s_countdown_timers[j + 1] = key;
+  }
+}
+
+
+
+/*
+ * promote a just-used timer to the top of its group
+ *
+ * last_update only has one-second resolution, so several timers touched in the
+ * same second compare equal. Moving the touched timer to the front of the array
+ * first means the stable sort keeps it ahead of those same-second peers, so the
+ * timer the user actually just used ends up on top of its running/paused group.
+ */
+
+static void prv_promote_timer(CountdownTimer *countdown_timer) {
+  if (s_timer_sort_mode != 0) {
+    rebuild_timer_view_indices();
+    return;
+  }
+
+  int16_t index = countdown_timer_list_get_timer_index(s_countdown_timers,
+    s_countdown_timers_count, countdown_timer);
+  if (index > 0) {
+    memmove(&s_countdown_timers[1], &s_countdown_timers[0],
+      sizeof(CountdownTimer*) * index);
+    s_countdown_timers[0] = countdown_timer;
+  }
+  prv_sort_timers_by_recency();
+  rebuild_timer_view_indices();
+}
 
 
 /*******************************************************************************
@@ -94,6 +193,12 @@ static void app_timer_callback(void *data) {
     s_countdown_timers_count);
 
   if (countdown_timer != NULL) {
+    // a timer just expired and is now paused; re-sort so it drops below any
+    // still-running timers
+    if (s_timer_sort_mode == 0) {
+      prv_sort_timers_by_recency();
+    }
+    rebuild_timer_view_indices();
     // deep refresh the DetailWindow in case it was that timer
     detail_window_deep_refresh(s_detail_window);
     // show timer confirmation window
@@ -126,15 +231,8 @@ static void app_timer_callback(void *data) {
   int64_t inactivity_duration = countdown_timer_get_epoch_ms() - s_last_activity;
 
   // schedule next refresh
-  uint16_t refresh_rate = 35;
-  if (detail_top && !detail_window_get_update_needed(s_detail_window)) {
-    refresh_rate = 1000;
-  }
-  else if (menu_top) {
-    refresh_rate = 1000;
-  }
-  else if (popup_top) {
-    refresh_rate = 20;
+  uint16_t refresh_rate = prv_get_next_refresh_delay();
+  if (popup_top) {
     inactivity_duration = 0;
   }
   if (refresh_rate == 0) {
@@ -157,6 +255,7 @@ static void app_timer_callback(void *data) {
 static void popup_window_snooze_timer_callback(CountdownTimer *countdown_timer, void *context) {
   countdown_timer_update(countdown_timer, COUNTDOWN_TIMER_SNOOZE_DELAY, false);
   countdown_timer_start(countdown_timer);
+  prv_promote_timer(countdown_timer);
   popup_window_pop(s_popup_window, true);
   // show detail if not on top
   if (!detail_window_get_topmost_window(s_detail_window)) {
@@ -197,7 +296,7 @@ static void setting_window_complete_callback(int64_t duration, void *context) {
   if (duration < TIMER_MIN_LENGTH) {
     setting_window_pop(setting_window, true);
     if (s_app_timer != NULL) {
-      app_timer_reschedule(s_app_timer, 10);
+      app_timer_reschedule(s_app_timer, MIN_REFRESH_DELAY);
     }
     return;
   }
@@ -235,9 +334,12 @@ static void setting_window_complete_callback(int64_t duration, void *context) {
     }
   }
 
+  // float the just-used timer to the top of the list
+  prv_promote_timer(countdown_timer);
+
   // refresh now
   if (s_app_timer != NULL) {
-    app_timer_reschedule(s_app_timer, 10);
+    app_timer_reschedule(s_app_timer, MIN_REFRESH_DELAY);
   }
 
   // log activity
@@ -268,6 +370,9 @@ static void detail_window_edit_timer_callback(CountdownTimer *countdown_timer, v
 
 static void detail_window_playpause_timer_callback(CountdownTimer *countdown_timer, void *context) {
   if (countdown_timer_get_paused(countdown_timer)) {
+    if (countdown_timer_get_current_time(countdown_timer) <= 0) {
+      countdown_timer_update(countdown_timer, countdown_timer_get_duration(countdown_timer), false);
+    }
     // push the Timeline pin
     if (countdown_timer_get_duration(countdown_timer) >= TIMELINE_MIN_LENGTH) {
       phone_send_pin(countdown_timer);
@@ -283,6 +388,8 @@ static void detail_window_playpause_timer_callback(CountdownTimer *countdown_tim
     // stop the timer
     countdown_timer_stop(countdown_timer, &s_countdown_timer_id_max);
   }
+  // float the just-used timer to the top of the list
+  prv_promote_timer(countdown_timer);
   // refresh DetailWindow
   detail_window_deep_refresh(s_detail_window);
 
@@ -333,9 +440,9 @@ static void detail_window_delete_timer_callback(CountdownTimer *countdown_timer,
 
   // refresh immediately
   if (s_app_timer) {
-    app_timer_reschedule(s_app_timer, 10);
+    app_timer_reschedule(s_app_timer, POPUP_REFRESH_DELAY);
   } else {
-    s_app_timer = app_timer_register(10, app_timer_callback, NULL);
+    s_app_timer = app_timer_register(POPUP_REFRESH_DELAY, app_timer_callback, NULL);
   }
 
   // log activity
@@ -388,6 +495,9 @@ static void menu_window_click_callback(uint8_t index, void *context) {
     // toggle sort mode (created at <-> duration)
     s_timer_sort_mode = !s_timer_sort_mode;
     persist_write_int(TIMER_SORT_MODE_PERSIST_KEY, s_timer_sort_mode);
+    if (s_timer_sort_mode == 0) {
+      prv_sort_timers_by_recency();
+    }
     rebuild_timer_view_indices();
     menu_window_reload_data(s_menu_window);
     menu_window_refresh(s_menu_window);
@@ -401,9 +511,8 @@ static void menu_window_click_callback(uint8_t index, void *context) {
       s_countdown_timers[s_timer_view_indices[view_index]]);
     detail_window_push(s_detail_window, true);
     detail_window_deep_refresh(s_detail_window);
-    // start timer refreshing quickly
     if (s_app_timer != NULL) {
-      app_timer_reschedule(s_app_timer, 10);
+      app_timer_reschedule(s_app_timer, MIN_REFRESH_DELAY);
     }
   }
 
@@ -426,14 +535,18 @@ static void initialize(void) {
   phone_connect();
   // load the CountdownTimer data
   if (persist_exists(COUNTDOWN_TIMER_PERSIST_KEY)) {
-    countdown_timer_list_load(s_countdown_timers, &s_countdown_timers_count,
-      COUNTDOWN_TIMER_PERSIST_KEY);
+    countdown_timer_list_load(s_countdown_timers, COUNTDOWN_TIMERS_MAX,
+      &s_countdown_timers_count, COUNTDOWN_TIMER_PERSIST_KEY);
   }
   if (persist_exists(COUNTDOWN_TIMER_ID_PERSIST_KEY)) {
     s_countdown_timer_id_max = persist_read_int(COUNTDOWN_TIMER_ID_PERSIST_KEY);
   }
   if (persist_exists(TIMER_SORT_MODE_PERSIST_KEY)) {
     s_timer_sort_mode = persist_read_int(TIMER_SORT_MODE_PERSIST_KEY) ? 1 : 0;
+  }
+  if (s_timer_sort_mode == 0) {
+    // open the restored list with the most recently used timer on top
+    prv_sort_timers_by_recency();
   }
   // cancel wakeup
   wakeup_cancel_all();
@@ -497,8 +610,7 @@ static void initialize(void) {
   }
 
   // start the main update timer
-  // update it really fast the first time so everything looks right
-  s_app_timer = app_timer_register(5, app_timer_callback, NULL);
+  s_app_timer = app_timer_register(prv_get_next_refresh_delay(), app_timer_callback, NULL);
 
   // log activity
   s_last_activity = countdown_timer_get_epoch_ms();

@@ -61,6 +61,7 @@
 #include <pebble.h>
 #include "countdown_timer.h"
 
+#define COUNTDOWN_TIMER_EXPIRED ((int64_t)-9223372036854775807LL - 1)
 #define MSEC_IN_SEC 1000
 #define MSEC_IN_MIN 60000
 #define MSEC_IN_HR 3600000
@@ -136,7 +137,11 @@ void countdown_timer_destroy(CountdownTimer *countdown_timer) {
 
 void countdown_timer_start(CountdownTimer *countdown_timer) {
   if (countdown_timer->paused) {
-    countdown_timer->start_ms += countdown_timer_get_epoch_ms();
+    if (countdown_timer->start_ms == COUNTDOWN_TIMER_EXPIRED) {
+      return;
+    }
+    int64_t now = countdown_timer_get_epoch_ms();
+    countdown_timer->start_ms += now;
     countdown_timer->paused = false;
     countdown_timer->last_update = time(NULL);
   }
@@ -176,7 +181,7 @@ void countdown_timer_update(CountdownTimer *countdown_timer, int64_t duration,
     countdown_timer->duration_ms = duration;
   }
   int64_t now = countdown_timer_get_epoch_ms();
-  countdown_timer->start_ms =  ((countdown_timer->paused) ? 0 : now)
+  countdown_timer->start_ms = ((countdown_timer->paused) ? 0 : now)
     + duration - countdown_timer->duration_ms;
   countdown_timer->last_update = time(NULL);
 }
@@ -200,7 +205,7 @@ CountdownTimer *countdown_timer_check_ended(CountdownTimer **timer_array,
     // check if expired and not paused
     if (!timer_array[ii]->paused &&
         timer_array[ii]->start_ms + timer_array[ii]->duration_ms <= now) {
-      timer_array[ii]->start_ms = 0;
+      timer_array[ii]->start_ms = COUNTDOWN_TIMER_EXPIRED;
       timer_array[ii]->paused = true;
       if (return_timer == NULL) {
         return_timer = timer_array[ii];
@@ -388,17 +393,46 @@ void countdown_timer_list_save(CountdownTimer **timer_array, uint8_t timer_array
  * loads all timers from persistent storage
  */
 
-void countdown_timer_list_load(CountdownTimer **timer_array, uint8_t *timer_array_count,
-                               uint32_t key) {
-  (*timer_array_count) = persist_read_int(key++);
-  for (uint8_t ii = 0; ii < (*timer_array_count); ii++) {
-    timer_array[ii] = (CountdownTimer*)malloc(sizeof(CountdownTimer));
-    if (timer_array[ii]) {
-      persist_read_data(key++, timer_array[ii], sizeof(CountdownTimer));
-    } else {
+void countdown_timer_list_load(CountdownTimer **timer_array, uint8_t timer_array_max,
+                               uint8_t *timer_array_count, uint32_t key) {
+  (*timer_array_count) = 0;
+  int32_t stored_count = persist_read_int(key++);
+  // Reject a corrupt or foreign-format count (e.g. data left behind by a
+  // different/older build that reuses this UUID). Loading more than the array
+  // can hold would overflow timer_array.
+  if (stored_count < 0 || stored_count > timer_array_max) {
+    APP_LOG(APP_LOG_LEVEL_WARNING, "Ignoring persisted timers: bad count %d", (int)stored_count);
+    return;
+  }
+  for (int32_t ii = 0; ii < stored_count; ii++, key++) {
+    // Reject blobs that weren't written by this exact CountdownTimer layout.
+    // A size mismatch means the persisted data came from a different struct
+    // (an older app or the Rebble-store build) and would otherwise be read as
+    // garbage, producing the nonsense "IP-like" timer values.
+    if (!persist_exists(key) || persist_get_size(key) != (int)sizeof(CountdownTimer)) {
+      APP_LOG(APP_LOG_LEVEL_WARNING, "Ignoring persisted timers: incompatible blob size");
+      countdown_timer_list_destroy_all(timer_array, timer_array_count);
+      return;
+    }
+    CountdownTimer *timer = (CountdownTimer*)malloc(sizeof(CountdownTimer));
+    if (!timer) {
       APP_LOG(APP_LOG_LEVEL_ERROR, "Failed to allocate memory while loading timers!");
       return;
     }
+    persist_read_data(key, timer, sizeof(CountdownTimer));
+    // Reject blobs whose contents are nonsensical even though the size matched
+    // (e.g. same-sized foreign data). A zero/negative duration would later
+    // divide by zero when drawing the menu progress bar, and the expired
+    // sentinel must only ever appear on a paused timer.
+    bool valid_duration = timer->duration_ms > 0;
+    bool valid_expired = timer->start_ms != COUNTDOWN_TIMER_EXPIRED || timer->paused;
+    if (!valid_duration || !valid_expired) {
+      APP_LOG(APP_LOG_LEVEL_WARNING, "Ignoring persisted timers: invalid timer contents");
+      free(timer);
+      countdown_timer_list_destroy_all(timer_array, timer_array_count);
+      return;
+    }
+    timer_array[(*timer_array_count)++] = timer;
   }
 }
 
@@ -429,15 +463,39 @@ int64_t countdown_timer_get_start(CountdownTimer *countdown_timer) {
  */
 
 int64_t countdown_timer_get_current_time(CountdownTimer *countdown_timer) {
-  int64_t current_time = countdown_timer_get_epoch_ms();
-  if (countdown_timer->start_ms != 0) {
-    current_time = countdown_timer->duration_ms -
-      (current_time - ((countdown_timer->start_ms + current_time - 1) % current_time));
+  if (countdown_timer->start_ms == COUNTDOWN_TIMER_EXPIRED) {
+    return 0;
   }
-  else {
+
+  int64_t current_time = countdown_timer->duration_ms;
+  if (countdown_timer->paused) {
+    current_time += countdown_timer->start_ms;
+  } else {
+    current_time -= countdown_timer_get_epoch_ms() - countdown_timer->start_ms;
+  }
+
+  if (current_time < 0) {
+    current_time = 0;
+  } else if (current_time > countdown_timer->duration_ms) {
     current_time = countdown_timer->duration_ms;
   }
   return current_time;
+}
+
+
+
+/*
+ * gets the time to display for the CountdownTimer in milliseconds
+ *
+ * an expired timer displays its total duration rather than zero,
+ * matching how it looked before it was started
+ */
+
+int64_t countdown_timer_get_display_time(CountdownTimer *countdown_timer) {
+  if (countdown_timer->start_ms == COUNTDOWN_TIMER_EXPIRED) {
+    return countdown_timer->duration_ms;
+  }
+  return countdown_timer_get_current_time(countdown_timer);
 }
 
 
@@ -508,7 +566,7 @@ void countdown_timer_format_text(int64_t value, char *buff, uint8_t size) {
  */
 
 char *countdown_timer_format_own_buff(CountdownTimer *countdown_timer) {
-  countdown_timer_format_text(countdown_timer_get_current_time(countdown_timer),
+  countdown_timer_format_text(countdown_timer_get_display_time(countdown_timer),
     countdown_timer->buff, sizeof(countdown_timer->buff));
   return countdown_timer->buff;
 }
