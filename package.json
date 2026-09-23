@@ -112,7 +112,7 @@
       "KEY_DURATION": 5
     },
     "enableMultiJS": true,
-    "displayName": "Timer",
+    "displayName": "TimerBetterer",
     "watchapp": {
       "onlyShownOnCommunication": false,
       "hiddenApp": false,
@@ -128,5 +128,5 @@
     ],
     "capabilities": []
   },
-  "name": "Timer"
+  "name": "TimerBetterer"
 }
