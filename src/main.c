@@ -20,13 +20,13 @@
 // constants
 #define COUNTDOWN_TIMER_PERSIST_KEY 72445846
 #define COUNTDOWN_TIMER_ID_PERSIST_KEY 3568356
+#define TIMER_SORT_BY_DURATION_PERSIST_KEY 9938472
 #define PERSIST_VERSION 1
 #define PERSIST_VERSION_KEY 46134672
 #define COUNTDOWN_TIMERS_MAX 8
 #define COUNTDOWN_TIMER_SNOOZE_DELAY 60000 // milliseconds
 #define TIMER_MIN_LENGTH 5000 // milliseconds
 #define TIMELINE_MIN_LENGTH 900000 // milliseconds
-#define TIMER_SORT_MODE_PERSIST_KEY 9938472
 #define INACTIVITY_THRESHOLD 900000 // length of time before refresh throttling in milliseconds
 #define INACTIVE_REFRESH_DELAY 1000 // ms between frames after throttling
 #define REFRESH_DELAY 1000 // ms between periodic redraws
@@ -49,34 +49,10 @@ static PopupWindow *s_popup_window = NULL;
 static uint8_t s_countdown_timers_count = 0;
 static CountdownTimer *s_countdown_timers[COUNTDOWN_TIMERS_MAX] = {};
 static uint8_t s_timer_view_indices[COUNTDOWN_TIMERS_MAX] = {};
-static uint8_t s_timer_sort_mode = 0; // 0=created at, 1=duration
+static bool s_timer_sort_by_duration = false;
 static int32_t s_countdown_timer_id_max = 0;
 static AppTimer *s_app_timer = NULL;
 static int64_t s_last_activity = 0;
-
-static void rebuild_timer_view_indices(void) {
-  for (uint8_t i = 0; i < s_countdown_timers_count; i++) {
-    s_timer_view_indices[i] = i;
-  }
-
-  if (s_timer_sort_mode == 0) {
-    return;
-  }
-
-  // Stable sort by duration (shortest -> longest), using created order as tiebreaker.
-  for (uint8_t i = 0; i < s_countdown_timers_count; i++) {
-    for (uint8_t j = 0; j + 1 < s_countdown_timers_count - i; j++) {
-      const uint8_t a_i = s_timer_view_indices[j];
-      const uint8_t b_i = s_timer_view_indices[j + 1];
-      const int64_t a = countdown_timer_get_duration(s_countdown_timers[a_i]);
-      const int64_t b = countdown_timer_get_duration(s_countdown_timers[b_i]);
-      if (a > b) {
-        s_timer_view_indices[j] = b_i;
-        s_timer_view_indices[j + 1] = a_i;
-      }
-    }
-  }
-}
 
 static uint16_t prv_get_next_refresh_delay(void) {
   if (popup_window_get_topmost_window(s_popup_window)) {
@@ -127,23 +103,86 @@ static bool prv_timer_precedes(CountdownTimer *a, CountdownTimer *b) {
 
 
 /*
- * sort the timer list: running timers on top (most recently used first), then
- * paused timers (most recently used first)
+ * decides whether timer "a" should be listed above timer "b" when sorting by
+ * length
  *
- * insertion sort is fine here: the list holds at most COUNTDOWN_TIMERS_MAX
- * entries.
+ * strictly shorter wins, so equal-length timers keep the order they arrived in
+ * -- which is recency order, since the storage array is always recency-sorted
  */
 
-static void prv_sort_timers_by_recency(void) {
-  for (uint8_t i = 1; i < s_countdown_timers_count; i++) {
-    CountdownTimer *key = s_countdown_timers[i];
+static bool prv_timer_is_shorter(CountdownTimer *a, CountdownTimer *b) {
+  return countdown_timer_get_duration(a) < countdown_timer_get_duration(b);
+}
+
+
+
+/*
+ * an ordering over two timers, as used by prv_sort_timers
+ */
+
+typedef bool (*TimerPrecedes)(CountdownTimer *a, CountdownTimer *b);
+
+
+
+/*
+ * order "timers" in place, placing "a" before "b" whenever precedes(a, b)
+ *
+ * insertion sort is fine here: the list holds at most COUNTDOWN_TIMERS_MAX
+ * entries. it is also stable, which both orderings rely on for tiebreaking.
+ */
+
+static void prv_sort_timers(CountdownTimer **timers, uint8_t count, TimerPrecedes precedes) {
+  for (uint8_t i = 1; i < count; i++) {
+    CountdownTimer *key = timers[i];
     int16_t j = (int16_t)i - 1;
-    while (j >= 0 && prv_timer_precedes(key, s_countdown_timers[j])) {
-      s_countdown_timers[j + 1] = s_countdown_timers[j];
+    while (j >= 0 && precedes(key, timers[j])) {
+      timers[j + 1] = timers[j];
       j--;
     }
-    s_countdown_timers[j + 1] = key;
+    timers[j + 1] = key;
   }
+}
+
+
+
+/*
+ * rebuild the view slot -> storage index mapping the MenuWindow reads through
+ *
+ * the storage array is always kept in recency order, so the recency view is
+ * just the identity mapping and the duration view is a reordering laid over the
+ * top. keeping the two separate means toggling the sort never destroys recency.
+ */
+
+static void prv_rebuild_timer_view_indices(void) {
+  if (!s_timer_sort_by_duration) {
+    for (uint8_t i = 0; i < s_countdown_timers_count; i++) {
+      s_timer_view_indices[i] = i;
+    }
+    return;
+  }
+
+  CountdownTimer *by_duration[COUNTDOWN_TIMERS_MAX];
+  memcpy(by_duration, s_countdown_timers, sizeof(CountdownTimer*) * s_countdown_timers_count);
+  prv_sort_timers(by_duration, s_countdown_timers_count, prv_timer_is_shorter);
+  for (uint8_t i = 0; i < s_countdown_timers_count; i++) {
+    s_timer_view_indices[i] = (uint8_t)countdown_timer_list_get_timer_index(s_countdown_timers,
+      s_countdown_timers_count, by_duration[i]);
+  }
+}
+
+
+
+/*
+ * re-establish the list invariants after any change to the timers
+ *
+ * every mutation of the timer list funnels through here: the storage array goes
+ * back into recency order (running timers on top, most recently used first) and
+ * the view mapping is rebuilt to match the selected sort.
+ */
+
+static void prv_timers_changed(void) {
+  prv_sort_timers(s_countdown_timers, s_countdown_timers_count, prv_timer_precedes);
+  prv_rebuild_timer_view_indices();
 }
 
 
@@ -158,11 +197,6 @@ static void prv_sort_timers_by_recency(void) {
  */
 
 static void prv_promote_timer(CountdownTimer *countdown_timer) {
-  if (s_timer_sort_mode != 0) {
-    rebuild_timer_view_indices();
-    return;
-  }
-
   int16_t index = countdown_timer_list_get_timer_index(s_countdown_timers,
     s_countdown_timers_count, countdown_timer);
   if (index > 0) {
@@ -170,9 +204,9 @@ static void prv_promote_timer(CountdownTimer *countdown_timer) {
       sizeof(CountdownTimer*) * index);
     s_countdown_timers[0] = countdown_timer;
   }
-  prv_sort_timers_by_recency();
-  rebuild_timer_view_indices();
+  prv_timers_changed();
 }
+
 
 
 /*******************************************************************************
@@ -195,10 +229,7 @@ static void app_timer_callback(void *data) {
   if (countdown_timer != NULL) {
     // a timer just expired and is now paused; re-sort so it drops below any
     // still-running timers
-    if (s_timer_sort_mode == 0) {
-      prv_sort_timers_by_recency();
-    }
-    rebuild_timer_view_indices();
+    prv_timers_changed();
     // deep refresh the DetailWindow in case it was that timer
     detail_window_deep_refresh(s_detail_window);
     // show timer confirmation window
@@ -308,7 +339,6 @@ static void setting_window_complete_callback(int64_t duration, void *context) {
       &s_countdown_timers_count, countdown_timer);
     countdown_timer_start(countdown_timer);
     // update visuals
-    rebuild_timer_view_indices();
     menu_window_reload_data(s_menu_window);
     menu_window_refresh(s_menu_window);
     detail_window_set_countdown_timer(s_detail_window, countdown_timer);
@@ -323,7 +353,6 @@ static void setting_window_complete_callback(int64_t duration, void *context) {
   } else {
     countdown_timer_update(countdown_timer, duration, true);
     countdown_timer_start(countdown_timer);
-    rebuild_timer_view_indices();
     detail_window_deep_refresh(s_detail_window);
     setting_window_pop(setting_window, true);
     // deal with timeline
@@ -415,7 +444,7 @@ static void detail_window_delete_timer_callback(CountdownTimer *countdown_timer,
     s_countdown_timers_count, countdown_timer);
   countdown_timer_destroy(countdown_timer);
   countdown_timer_list_remove(s_countdown_timers, &s_countdown_timers_count, timer_index);
-  rebuild_timer_view_indices();
+  prv_timers_changed();
   // reload MenuWindow data (no idea why, but this must be called twice or when the last timer
   // is deleted, the "+" cell is stuck at the short cell height)
   menu_window_reload_data(s_menu_window);
@@ -476,8 +505,15 @@ static uint8_t menu_window_get_timer_count_callback(void *context) {
   return s_countdown_timers_count;
 }
 
-static uint8_t menu_window_get_sort_mode_callback(void *context) {
-  return s_timer_sort_mode;
+
+
+/*
+ * MenuWindow get sort by duration callback
+ * reports which ordering the menu list should show
+ */
+
+static bool menu_window_get_sort_by_duration_callback(void *context) {
+  return s_timer_sort_by_duration;
 }
 
 
@@ -491,24 +527,26 @@ static void menu_window_click_callback(uint8_t index, void *context) {
   if (index == 0) {
     setting_window_set_timer(s_setting_window, NULL);
     setting_window_push(s_setting_window, true);
-  } else if (index == s_countdown_timers_count + 1) {
-    // toggle sort mode (created at <-> duration)
-    s_timer_sort_mode = !s_timer_sort_mode;
-    persist_write_int(TIMER_SORT_MODE_PERSIST_KEY, s_timer_sort_mode);
-    if (s_timer_sort_mode == 0) {
-      prv_sort_timers_by_recency();
-    }
-    rebuild_timer_view_indices();
+  } else if (menu_window_row_is_sort_toggle(s_menu_window, index)) {
+    // toggle between recency and duration ordering
+    s_timer_sort_by_duration = !s_timer_sort_by_duration;
+    prv_rebuild_timer_view_indices();
     menu_window_reload_data(s_menu_window);
+    // reloading drops the selection back to the "+" row, but the toggle lives at
+    // the bottom of the list, so put the user back on it
+    menu_window_select_row(s_menu_window, index);
     menu_window_refresh(s_menu_window);
   } else {
     // show timer in detail window
-    const uint8_t view_index = index - 1;
-    if (view_index >= s_countdown_timers_count) {
+    const int16_t view_index = menu_window_row_to_timer_index(s_menu_window, index);
+    if (view_index < 0) {
       return;
     }
-    detail_window_set_countdown_timer(s_detail_window,
-      s_countdown_timers[s_timer_view_indices[view_index]]);
+    CountdownTimer *countdown_timer = menu_window_get_timer_callback((uint8_t)view_index, context);
+    if (countdown_timer == NULL) {
+      return;
+    }
+    detail_window_set_countdown_timer(s_detail_window, countdown_timer);
     detail_window_push(s_detail_window, true);
     detail_window_deep_refresh(s_detail_window);
     if (s_app_timer != NULL) {
@@ -541,23 +579,20 @@ static void initialize(void) {
   if (persist_exists(COUNTDOWN_TIMER_ID_PERSIST_KEY)) {
     s_countdown_timer_id_max = persist_read_int(COUNTDOWN_TIMER_ID_PERSIST_KEY);
   }
-  if (persist_exists(TIMER_SORT_MODE_PERSIST_KEY)) {
-    s_timer_sort_mode = persist_read_int(TIMER_SORT_MODE_PERSIST_KEY) ? 1 : 0;
-  }
-  if (s_timer_sort_mode == 0) {
-    // open the restored list with the most recently used timer on top
-    prv_sort_timers_by_recency();
+  if (persist_exists(TIMER_SORT_BY_DURATION_PERSIST_KEY)) {
+    s_timer_sort_by_duration = (persist_read_int(TIMER_SORT_BY_DURATION_PERSIST_KEY) != 0);
   }
   // cancel wakeup
   wakeup_cancel_all();
 
-  rebuild_timer_view_indices();
+  // open the restored list with the most recently used timer on top
+  prv_timers_changed();
 
   // create menu window
   MenuWindowCallbacks menu_callbacks = {
     .get_timer = menu_window_get_timer_callback,
     .get_timer_count = menu_window_get_timer_count_callback,
-    .get_sort_mode = menu_window_get_sort_mode_callback,
+    .get_sort_by_duration = menu_window_get_sort_by_duration_callback,
     .clicked = menu_window_click_callback,
   };
   s_menu_window = menu_window_create(menu_callbacks, true);
@@ -671,6 +706,7 @@ static void deinitialize(void) {
   // persist state
   persist_write_int(PERSIST_VERSION_KEY, PERSIST_VERSION);
   persist_write_int(COUNTDOWN_TIMER_ID_PERSIST_KEY, s_countdown_timer_id_max);
+  persist_write_int(TIMER_SORT_BY_DURATION_PERSIST_KEY, s_timer_sort_by_duration ? 1 : 0);
   countdown_timer_list_save(s_countdown_timers, s_countdown_timers_count,
     COUNTDOWN_TIMER_PERSIST_KEY);
   // schedule the wakeup

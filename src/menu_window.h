@@ -12,6 +12,11 @@
  *      bool        menu_window_get_topmost_window(MenuWindow *menu_window);
  *      void        menu_window_refresh(MenuWindow *menu_window);
  *      void        menu_window_reload_data(MenuWindow *menu_window);
+ *      void        menu_window_select_row(MenuWindow *menu_window, uint8_t row);
+ *      bool        menu_window_row_is_sort_toggle(MenuWindow *menu_window,
+ *                      uint8_t row);
+ *      int16_t     menu_window_row_to_timer_index(MenuWindow *menu_window,
+ *                      uint8_t row);
  *      void        menu_window_set_highlight_color(MenuWindow *menu_window,
  *                      GColor color);
  *
@@ -49,16 +54,16 @@ typedef CountdownTimer* (*MenuWindowGetTimer)(uint8_t index, void *context);
 typedef uint8_t (*MenuWindowGetTimerCount)(void *context);
 
 /*
- * Callback:    MenuWindowGetSortMode
- * ----------------------------------
- * gets the current timer sorting mode for the menu list
+ * Callback:    MenuWindowGetSortByDuration
+ * -----------------------------------------
+ * gets whether the menu list is currently sorted by timer length
  *
  * returns:
- *   0 = created at (added order)
- *   1 = duration (shortest to longest)
+ *   true  = shortest timer first
+ *   false = most recently used first, running timers above paused ones
  */
 
-typedef uint8_t (*MenuWindowGetSortMode)(void *context);
+typedef bool (*MenuWindowGetSortByDuration)(void *context);
 
 
 
@@ -81,7 +86,7 @@ typedef void (*MenuWindowClickCallback)(uint8_t index, void *context);
 typedef struct MenuWindowCallbacks {
   MenuWindowGetTimer get_timer;
   MenuWindowGetTimerCount get_timer_count;
-  MenuWindowGetSortMode get_sort_mode;
+  MenuWindowGetSortByDuration get_sort_by_duration;
   MenuWindowClickCallback clicked;
 } MenuWindowCallbacks;
 
@@ -167,6 +172,49 @@ void menu_window_refresh(MenuWindow *menu_window);
  */
 
 void menu_window_reload_data(MenuWindow *menu_window);
+
+
+
+/*
+ * Function:    menu_window_select_row
+ * -----------------------------------
+ * move the menu layer's selection to a given row, ignoring out of range rows
+ *
+ *  menu_window: a pointer to the window whose selection to move
+ *  row: the row to select
+ */
+
+void menu_window_select_row(MenuWindow *menu_window, uint8_t row);
+
+
+
+/*
+ * Function:    menu_window_row_is_sort_toggle
+ * -------------------------------------------
+ * checks whether a menu row holds the sort toggle rather than a timer
+ *
+ *  menu_window: a pointer to the window the row belongs to
+ *  row: the row to check
+ *
+ * returns: true if the row is the sort toggle
+ */
+
+bool menu_window_row_is_sort_toggle(MenuWindow *menu_window, uint8_t row);
+
+
+
+/*
+ * Function:    menu_window_row_to_timer_index
+ * -------------------------------------------
+ * maps a menu row onto the index of the timer it displays
+ *
+ *  menu_window: a pointer to the window the row belongs to
+ *  row: the row to map
+ *
+ * returns: the timer index, or -1 if the row does not hold a timer
+ */
+
+int16_t menu_window_row_to_timer_index(MenuWindow *menu_window, uint8_t row);
 
 
 

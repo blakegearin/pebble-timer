@@ -12,6 +12,11 @@
  *      bool        menu_window_get_topmost_window(MenuWindow *menu_window);
  *      void        menu_window_refresh(MenuWindow *menu_window);
  *      void        menu_window_reload_data(MenuWindow *menu_window);
+ *      void        menu_window_select_row(MenuWindow *menu_window, uint8_t row);
+ *      bool        menu_window_row_is_sort_toggle(MenuWindow *menu_window,
+ *                      uint8_t row);
+ *      int16_t     menu_window_row_to_timer_index(MenuWindow *menu_window,
+ *                      uint8_t row);
  *      void        menu_window_set_highlight_color(MenuWindow *menu_window,
  *                      GColor color);
  *
@@ -74,6 +79,28 @@ static uint16_t menu_get_num_sections_callback(MenuLayer *menu_layer, void *cont
 
 
 /*
+ * row layout of the menu list, in one place
+ *
+ * rows are [0] the "+" add cell, [1..timer_count] the timers, and finally the
+ * sort toggle -- which is only shown once there are at least two timers to
+ * reorder. every site that maps between rows and timers goes through these.
+ */
+
+static uint8_t menu_get_timer_count(MenuWindow *menu_window) {
+  return menu_window->callbacks.get_timer_count(menu_window);
+}
+
+static bool menu_has_sort_row(MenuWindow *menu_window) {
+  return menu_get_timer_count(menu_window) >= 2;
+}
+
+static uint16_t menu_get_row_count(MenuWindow *menu_window) {
+  return menu_get_timer_count(menu_window) + (menu_has_sort_row(menu_window) ? 2 : 1);
+}
+
+
+
+/*
  * get number of rows per section for menu layer
  * since there is only one section, no need to take sections into account
  */
@@ -81,10 +108,7 @@ static uint16_t menu_get_num_sections_callback(MenuLayer *menu_layer, void *cont
 static uint16_t menu_get_num_rows_callback(MenuLayer *menu_layer, uint16_t section_index,
                                            void *context) {
   MenuWindow *menu_window = (MenuWindow*)context;
-  const uint8_t timer_count = menu_window->callbacks.get_timer_count(context);
-  // rows: [0] "+" add, [1..timer_count] timers, [timer_count+1] sort toggle
-  // Hide the sort row unless there are at least two timers to reorder.
-  return (timer_count < 2) ? timer_count + 1 : timer_count + 2;
+  return menu_get_row_count(menu_window);
 }
 
 
@@ -167,16 +191,14 @@ static void menu_draw_row_callback(GContext* ctx, const Layer *cell_layer, MenuI
                                    void *context) {
   // get properties
   MenuWindow *menu_window = (MenuWindow *) context;
-  const uint8_t timer_count = menu_window->callbacks.get_timer_count(context);
   // draw contents, with "+" in first cell
   if (cell_index->row == 0) {
     menu_cell_draw(ctx, cell_layer, "+", NULL, 0, fonts_get_system_font(FONT_KEY_GOTHIC_28),
       true, GColorBlack, GColorWhite);
-  } else if (cell_index->row == timer_count + 1) {
-    const uint8_t sort_mode = menu_window->callbacks.get_sort_mode ?
-                              menu_window->callbacks.get_sort_mode(context) : 0;
-    const char *title = sort_mode ? "Sort: Duration" : "Sort: Created";
-    menu_cell_draw(ctx, cell_layer, (char*)title, NULL, 0,
+  } else if (menu_window_row_is_sort_toggle(menu_window, cell_index->row)) {
+    char *title = menu_window->callbacks.get_sort_by_duration(context) ? "Sort: Duration" :
+                                                                        "Sort: Recent";
+    menu_cell_draw(ctx, cell_layer, title, NULL, 0,
                    fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
                    true, GColorBlack, GColorWhite);
   } else {
@@ -357,6 +379,44 @@ void menu_window_refresh(MenuWindow *menu_window) {
 void menu_window_reload_data(MenuWindow *menu_window) {
   // this makes the selected index go back to the top, but this is also desired
   menu_layer_reload_data(menu_window->menu);
+}
+
+
+
+/*
+ * select a row in the menu list
+ */
+
+void menu_window_select_row(MenuWindow *menu_window, uint8_t row) {
+  if (row >= menu_get_row_count(menu_window)) {
+    return;
+  }
+  menu_layer_set_selected_index(menu_window->menu, (MenuIndex) { .section = 0, .row = row },
+    MenuRowAlignCenter, false);
+}
+
+
+
+/*
+ * check whether a row is the sort toggle
+ */
+
+bool menu_window_row_is_sort_toggle(MenuWindow *menu_window, uint8_t row) {
+  return menu_has_sort_row(menu_window) && row == menu_get_timer_count(menu_window) + 1;
+}
+
+
+
+/*
+ * map a menu row onto its timer, or -1 if the row does not hold one
+ */
+
+int16_t menu_window_row_to_timer_index(MenuWindow *menu_window, uint8_t row) {
+  if (row == 0 || menu_window_row_is_sort_toggle(menu_window, row) ||
+      row > menu_get_timer_count(menu_window)) {
+    return -1;
+  }
+  return (int16_t)row - 1;
 }
 
 
