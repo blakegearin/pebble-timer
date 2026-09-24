@@ -45,6 +45,14 @@
 #define OPTION_RADIO_TEXT_GAP 6    //< breathing room between label and circle
 #define OPTION_ROUND_TEXT_LEFT_INSET 20
 
+// same round menu-cell constants as the settings window (issue 01); without a
+// get_cell_height the rows fall to MenuLayer's 44 px default, which centres
+// neither the label nor the circle on the firmware metric
+#ifdef PBL_ROUND
+#define OPTION_CELL_HEIGHT_FOCUSED 68
+#define OPTION_CELL_HEIGHT 32
+#endif
+
 /*******************************************************************************
  * STRUCTURE DEFINITION
  */
@@ -149,8 +157,17 @@ static GFont option_title_font(void) {
 static void option_draw_radio(GContext *ctx, const Layer *cell_layer,
                               const OptionWindow *option_window, uint8_t row) {
   const GRect bounds = layer_get_bounds(cell_layer);
+  // Gothic capital ink sits a few px below the middle of the line box it was
+  // measured in, so a ring centred on the cell geometry reads as riding above
+  // the label. On round -- where the label is hand-drawn and the cell heights
+  // are fixed firmware constants -- drop the ring onto the ink. Rect uses
+  // menu_cell_basic_draw, whose own centring already agrees with ours.
+  int16_t center_y = bounds.size.h / 2;
+#ifdef PBL_ROUND
+  center_y += 4;
+#endif
   const GPoint center = GPoint(bounds.size.w - OPTION_RADIO_INSET - OPTION_RADIO_RADIUS,
-                               bounds.size.h / 2);
+                               center_y);
   const GColor color = menu_cell_layer_is_highlighted(cell_layer) ?
                        gcolor_legible_over(option_window->highlight_color) : GColorBlack;
   graphics_context_set_stroke_color(ctx, color);
@@ -217,6 +234,16 @@ static void option_select_callback(MenuLayer *menu_layer, MenuIndex *cell_index,
   option_window->selected(option, option_window->context);
 }
 
+#ifdef PBL_ROUND
+static int16_t option_get_cell_height_callback(MenuLayer *menu_layer, MenuIndex *cell_index,
+                                               void *context) {
+  if (menu_layer_get_selected_index(menu_layer).row == cell_index->row) {
+    return OPTION_CELL_HEIGHT_FOCUSED;
+  }
+  return OPTION_CELL_HEIGHT;
+}
+#endif
+
 
 
 /*
@@ -241,6 +268,9 @@ static void option_window_load(Window *window) {
     .draw_header = option_draw_header_callback,
     .draw_row = option_draw_row_callback,
     .select_click = option_select_callback,
+#ifdef PBL_ROUND
+    .get_cell_height = option_get_cell_height_callback,
+#endif
   };
   menu_layer_set_callbacks(option_window->menu, option_window, callbacks);
   menu_layer_set_click_config_onto_window(option_window->menu, window);
