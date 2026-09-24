@@ -29,6 +29,7 @@
 // the stored int keeps meaning "1 = sort by duration" even though this fork
 // ships duration as the default; the inversion lives in initialize/deinitialize
 #define TIMER_SORT_BY_DURATION_PERSIST_KEY 9938472
+#define TIMER_GROUPING_DISABLED_PERSIST_KEY 73849201
 #define TIMER_START_MANUALLY_PERSIST_KEY 51827394
 #define TIMER_DELETE_IMMEDIATELY_PERSIST_KEY 68013925
 #define TIMER_HIGHLIGHT_COLOR_PERSIST_KEY 19283746
@@ -70,6 +71,7 @@ static uint8_t s_countdown_timers_count = 0;
 static CountdownTimer *s_countdown_timers[COUNTDOWN_TIMERS_MAX] = {};
 static uint8_t s_timer_view_indices[COUNTDOWN_TIMERS_MAX] = {};
 static bool s_timer_sort_by_last_used = false;
+static bool s_grouping_disabled = false;
 // naming rule: every setting's bool is named so that false is the shipped
 // default. statics zero-initialise and an absent persist key leaves them
 // untouched, so "no key yet" means "the shipped default" with no default table
@@ -95,17 +97,18 @@ static int64_t s_last_activity = 0;
  * option index 0 is always the shipped default, which is what a zero value
  * means. this is an enum and a string table, not the data-driven descriptor
  * table the spec rejected -- it generates no UI. it exists because aplite
- * renders the same three settings as rows in the timer list while the other
+ * renders the same four settings as rows in the timer list while the other
  * platforms render them in the settings window: two renderers, one copy.
  */
 static const char *const s_setting_names[SettingCount] = {
-  "Sort Order", "Start Timers", "Delete",
+  "Sort Order", "Group", "Start Timers", "Delete",
 #ifdef PBL_COLOR
   "Color",
 #endif
 };
 static const char *const s_setting_options[SettingCount][2] = {
   { "Duration",      "Last Used"     },
+  { "On",            "Off"           },
   { "Manually",      "Automatically" },
   { "Confirm First", "Immediately"   },
 #ifdef PBL_COLOR
@@ -162,15 +165,16 @@ static uint16_t prv_get_next_refresh_delay(void) {
 /*
  * decides whether timer "a" should be listed above timer "b"
  *
- * running timers come before paused ones; within each group the most recently
- * used timer (largest last_update) comes first. "Used" means started, paused,
- * or edited -- anything that touches a timer's last_update.
+ * running timers come before paused ones -- unless Group is Off -- and within
+ * each group the most recently used timer (largest last_update) comes first.
+ * "Used" means started, paused, or edited -- anything that touches a timer's
+ * last_update.
  */
 
 static bool prv_timer_precedes(CountdownTimer *a, CountdownTimer *b) {
   bool a_running = !countdown_timer_get_paused(a);
   bool b_running = !countdown_timer_get_paused(b);
-  if (a_running != b_running) {
+  if (!s_grouping_disabled && a_running != b_running) {
     return a_running;
   }
   return countdown_timer_get_last_update(a) > countdown_timer_get_last_update(b);
@@ -285,12 +289,12 @@ static void prv_promote_timer(CountdownTimer *countdown_timer) {
   /*
    * the list opens with the cursor on the timer you last used
    *
-   * the order is untouched -- a timer created paused still lands below every
-   * running one -- but selection follows use. all four acting paths (create,
-   * edit, play/pause, snooze) already funnel through here, so this one place
-   * covers them all. delete and timer-expiry never promote, and so never
-   * steal the cursor: a deleted timer has no row to land on, and an expired
-   * one gets the stronger signal of a PopupWindow.
+    * the order is untouched -- a timer created paused still lands below every
+    * running one when Group is On -- but selection follows use. all four acting
+    * paths (create, edit, play/pause, snooze) already funnel through here, so
+    * this one place covers them all. delete and timer-expiry never promote,
+    * and so never steal the cursor: a deleted timer has no row to land on, and
+    * an expired one gets the stronger signal of a PopupWindow.
    */
   for (uint8_t view = 0; view < s_countdown_timers_count; view++) {
     if (s_countdown_timers[s_timer_view_indices[view]] == countdown_timer) {
@@ -374,6 +378,8 @@ static uint8_t prv_get_setting(SettingId setting) {
   switch (setting) {
     case SettingSortOrder:
       return s_timer_sort_by_last_used ? 1 : 0;
+    case SettingGroup:
+      return s_grouping_disabled ? 1 : 0;
     case SettingStartTimers:
       return s_start_timers_automatically ? 1 : 0;
     case SettingDelete:
@@ -397,6 +403,11 @@ static void prv_set_setting(SettingId setting, uint8_t option) {
     case SettingSortOrder:
       s_timer_sort_by_last_used = (option != 0);
       prv_rebuild_timer_view_indices();
+      break;
+    case SettingGroup:
+      s_grouping_disabled = (option != 0);
+      // the storage array itself is grouped, so re-establish both invariants
+      prv_timers_changed();
       break;
     case SettingStartTimers:
       s_start_timers_automatically = (option != 0);
@@ -437,8 +448,8 @@ static void app_timer_callback(void *data) {
     s_countdown_timers_count);
 
   if (countdown_timer != NULL) {
-    // a timer just expired and is now paused; re-sort so it drops below any
-    // still-running timers
+    // a timer just expired and is now paused; re-sort so, when Group is On,
+    // it drops below any still-running timers
     prv_timers_changed();
     // deep refresh the DetailWindow in case it was that timer
     detail_window_deep_refresh(s_detail_window);
@@ -546,6 +557,17 @@ static void duration_window_complete_callback(int64_t duration, void *context) {
   // check if new timer or editing
   if (countdown_timer == NULL) {
     countdown_timer = countdown_timer_create(duration, &s_countdown_timer_id_max);
+    // list_add destroys the tail timer when full, and it knows nothing about
+    // Timeline pins -- per the pin rule, that is this layer's job. The victim
+    // is the storage tail, and only a running one of at least TIMELINE_MIN_LENGTH
+    // can own a pin.
+    if (s_countdown_timers_count == COUNTDOWN_TIMERS_MAX) {
+      CountdownTimer *evicted = s_countdown_timers[COUNTDOWN_TIMERS_MAX - 1];
+      if (!countdown_timer_get_paused(evicted) &&
+          countdown_timer_get_duration(evicted) >= TIMELINE_MIN_LENGTH) {
+        phone_delete_pin(evicted);
+      }
+    }
     countdown_timer_list_add(s_countdown_timers, COUNTDOWN_TIMERS_MAX,
       &s_countdown_timers_count, countdown_timer);
     // Start Timers is absolute: under Manually the create path lands the
@@ -823,14 +845,14 @@ static void menu_window_click_callback(MenuRowKind kind, uint8_t row, void *cont
         break;
       }
       prv_set_setting((SettingId)setting, prv_get_setting((SettingId)setting) ? 0 : 1);
-      if ((SettingId)setting == SettingSortOrder) {
+      if ((SettingId)setting == SettingSortOrder || (SettingId)setting == SettingGroup) {
         // the timer order just changed, so reload -- which drops the
         // selection back to the "+" row. put the user back on the row they
         // just pressed.
         menu_window_reload_data(s_menu_window);
         menu_window_select_row(s_menu_window, row);
       }
-      // the other two settings changed only row content, not row count
+      // the remaining settings changed only row content, not row count
       menu_window_refresh(s_menu_window);
       break;
     }
@@ -865,6 +887,11 @@ static void initialize(void) {
     // stored int keeps 1.2.6's meaning: 1 = sort by duration. this fork
     // defaults to duration, so the variable is its inverse
     s_timer_sort_by_last_used = (persist_read_int(TIMER_SORT_BY_DURATION_PERSIST_KEY) == 0);
+  }
+  if (persist_exists(TIMER_GROUPING_DISABLED_PERSIST_KEY)) {
+    // a key this fork introduced, so it stores the bool's own meaning: no
+    // 1.2.6 contract to honour and no inversion at the load boundary
+    s_grouping_disabled = (persist_read_int(TIMER_GROUPING_DISABLED_PERSIST_KEY) != 0);
   }
   if (persist_exists(TIMER_START_MANUALLY_PERSIST_KEY)) {
     // same contract: 1 = start manually, and the fork's default inverts it
@@ -1025,6 +1052,7 @@ static void deinitialize(void) {
   persist_write_int(PERSIST_VERSION_KEY, PERSIST_VERSION);
   persist_write_int(COUNTDOWN_TIMER_ID_PERSIST_KEY, s_countdown_timer_id_max);
   persist_write_int(TIMER_SORT_BY_DURATION_PERSIST_KEY, s_timer_sort_by_last_used ? 0 : 1);
+  persist_write_int(TIMER_GROUPING_DISABLED_PERSIST_KEY, s_grouping_disabled ? 1 : 0);
   persist_write_int(TIMER_START_MANUALLY_PERSIST_KEY, s_start_timers_automatically ? 0 : 1);
   persist_write_int(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY, s_delete_immediately ? 1 : 0);
 #ifdef PBL_COLOR

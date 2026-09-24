@@ -29,6 +29,7 @@
 
 typedef enum {
   SettingSortOrder = 0,
+  SettingGroup,
   SettingStartTimers,
   SettingDelete,
 #ifdef PBL_COLOR

@@ -23,8 +23,8 @@ with `settings_window`. Do not reintroduce the collision.
 ## Terms
 
 - **Duration** -- the length dialled in on the duration picker.
-- **Setting** -- one of the app's preferences (`Sort Order`, `Start Timers`,
-  `Delete`, and -- on the colour platforms only -- `Color`). Named by
+- **Setting** -- one of the app's preferences (`Sort Order`, `Group`, `Start
+  Timers`, `Delete`, and -- on the colour platforms only -- `Color`). Named by
   `SettingId` in `settings.h`.
 - **Option** -- one choice within one setting (`Last Used` / `Duration`).
   Every setting has two options except `Color`, whose options are the eight
@@ -34,9 +34,11 @@ with `settings_window`. Do not reintroduce the collision.
 
 ## Storage index vs. view index
 
-`s_countdown_timers[]` is **always** in recency order: running timers above
-paused, most recently used first within each tier. `s_timer_view_indices[]`
-lays the selected sort over the top without disturbing it.
+`s_countdown_timers[]` is **always** in recency order: most recently used
+first, with running timers above paused -- that grouping is the `Group`
+setting, On by default, and Off makes the order purely by last use.
+`s_timer_view_indices[]` lays the selected sort over the top without
+disturbing it.
 
 A "timer index" in a `menu_window` signature is a **view** index.
 

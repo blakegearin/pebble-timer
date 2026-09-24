@@ -224,7 +224,9 @@ CountdownTimer *countdown_timer_check_ended(CountdownTimer **timer_array,
 /*
  * adds a new CountdownTimer to an array of them
  *
- * indexes CountdownTimer count as well, and pops oldest CountdownTimer if full
+ * indexes CountdownTimer count as well, and destroys the last entry if full.
+ * that victim may own a Timeline pin, which this layer knows nothing about:
+ * callers that use pins must delete the tail's pin before calling this.
  */
 
 void countdown_timer_list_add(CountdownTimer **timer_array, uint8_t timer_array_max,

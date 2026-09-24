@@ -4,10 +4,11 @@ A countdown timer for Pebble smartwatches, forked from Pebble's `pebble-timer` a
 
 ## Features
 
-- Option to sort timers by duration
-- Option to pause a timer on creation
-- Option to confirm deletion to avoid accidental taps
-- Option to recolour the app's highlights (colour platforms only)
+- Select a different highlight color
+- Sort timers by duration or creation
+- Pause or start a timer on create
+- Disable grouping
+- Extra confirmation to avoid accidental deletions
 
 ## Preview
 
@@ -15,7 +16,7 @@ A countdown timer for Pebble smartwatches, forked from Pebble's `pebble-timer` a
 <summary>Pebble Time 2</summary>
 
 | Detail | List | Settings | Options | Color |
-| --- | --- | --- | --- | --- |
+| ------ | ---- | -------- | ------- | ----- |
 | ![detail](assets/screenshots/emery/01-detail.png) | ![menu](assets/screenshots/emery/02-menu.png) | ![settings](assets/screenshots/emery/03-settings.png) | ![options](assets/screenshots/emery/04-options.png) | ![color](assets/screenshots/emery/01-color-picker.png) |
 
 </details>
@@ -24,7 +25,7 @@ A countdown timer for Pebble smartwatches, forked from Pebble's `pebble-timer` a
 <summary>Pebble 2 Duo</summary>
 
 | Detail | List | Settings | Options | Color |
-| --- | --- | --- | --- | --- |
+| ------ | ---- | -------- | ------- | ----- |
 | ![detail](assets/screenshots/gabbro/01-detail.png) | ![menu](assets/screenshots/gabbro/02-menu.png) | ![settings](assets/screenshots/gabbro/03-settings.png) | ![options](assets/screenshots/gabbro/04-options.png) | ![color](assets/screenshots/gabbro/01-color-picker.png) |
 
 </details>
@@ -32,9 +33,9 @@ A countdown timer for Pebble smartwatches, forked from Pebble's `pebble-timer` a
 <details>
 <summary>Pebble 2</summary>
 
-| Detail | List | Settings | Options |
-| --- | --- | --- | --- |
-| ![detail](assets/screenshots/diorite/01-detail.png) | ![menu](assets/screenshots/diorite/02-menu.png) | ![settings](assets/screenshots/diorite/03-settings.png) | ![options](assets/screenshots/diorite/04-options.png) |
+| Detail | List | Settings | Options | Color |
+| ------ | ---- | -------- | ------- | ----- |
+| ![detail](assets/screenshots/diorite/01-detail.png) | ![menu](assets/screenshots/diorite/02-menu.png) | ![settings](assets/screenshots/diorite/03-settings.png) | ![options](assets/screenshots/diorite/04-options.png) | ![color](assets/screenshots/diorite/01-color-picker.png) |
 
 </details>
 
@@ -42,7 +43,7 @@ A countdown timer for Pebble smartwatches, forked from Pebble's `pebble-timer` a
 <summary>Pebble Time Round</summary>
 
 | Detail | List | Settings | Options | Color |
-| --- | --- | --- | --- | --- |
+| ------ | ---- | -------- | ------- | ----- |
 | ![detail](assets/screenshots/chalk/01-detail.png) | ![menu](assets/screenshots/chalk/02-menu.png) | ![settings](assets/screenshots/chalk/03-settings.png) | ![options](assets/screenshots/chalk/04-options.png) | ![color](assets/screenshots/chalk/01-color-picker.png) |
 
 </details>
@@ -51,7 +52,7 @@ A countdown timer for Pebble smartwatches, forked from Pebble's `pebble-timer` a
 <summary>Pebble Time / Time Steel</summary>
 
 | Detail | List | Settings | Options | Color |
-| --- | --- | --- | --- | --- |
+| ------ | ---- | -------- | ------- | ----- |
 | ![detail](assets/screenshots/basalt/01-detail.png) | ![menu](assets/screenshots/basalt/02-menu.png) | ![settings](assets/screenshots/basalt/03-settings.png) | ![options](assets/screenshots/basalt/04-options.png) | ![color](assets/screenshots/basalt/01-color-picker.png) |
 
 </details>
@@ -59,9 +60,9 @@ A countdown timer for Pebble smartwatches, forked from Pebble's `pebble-timer` a
 <details>
 <summary>Pebble / Pebble Steel</summary>
 
-| Detail | List with inline settings | A row flipped |
-| --- | --- | --- |
-| ![detail](assets/screenshots/aplite/01-detail.png) | ![menu](assets/screenshots/aplite/02-menu.png) | ![flipped](assets/screenshots/aplite/03-flipped.png) |
+| Detail | List | Settings | Options | Color |
+| ------ | ---- | -------- | ------- | ----- |
+| ![detail](assets/screenshots/aplite/01-detail.png) | ![menu](assets/screenshots/aplite/02-menu.png) | ![settings](assets/screenshots/aplite/03-settings.png) | ![options](assets/screenshots/aplite/04-options.png) | ![color](assets/screenshots/aplite/01-color-picker.png) |
 
 </details>
 
