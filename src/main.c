@@ -26,6 +26,8 @@
 // this key's *value* is part of the on-flash contract: 1.2.6 users already have
 // their sort preference stored under 9938472, so renaming the #define is fine
 // but changing the integer would silently drop their choice on upgrade.
+// the stored int keeps meaning "1 = sort by duration" even though this fork
+// ships duration as the default; the inversion lives in initialize/deinitialize
 #define TIMER_SORT_BY_DURATION_PERSIST_KEY 9938472
 #define TIMER_START_MANUALLY_PERSIST_KEY 51827394
 #define TIMER_DELETE_IMMEDIATELY_PERSIST_KEY 68013925
@@ -67,18 +69,21 @@ static SettingId s_option_window_setting = SettingSortOrder;
 static uint8_t s_countdown_timers_count = 0;
 static CountdownTimer *s_countdown_timers[COUNTDOWN_TIMERS_MAX] = {};
 static uint8_t s_timer_view_indices[COUNTDOWN_TIMERS_MAX] = {};
-static bool s_timer_sort_by_duration = false;
+static bool s_timer_sort_by_last_used = false;
 // naming rule: every setting's bool is named so that false is the shipped
 // default. statics zero-initialise and an absent persist key leaves them
-// untouched, so "no key yet" means "today's behaviour" with no default table
-// to keep in sync -- and an upgrading user lands there automatically.
-static bool s_start_timers_manually = false;
+// untouched, so "no key yet" means "the shipped default" with no default table
+// to keep in sync -- and a fresh install lands there automatically. The rule
+// names the variables, not the on-flash ints: a stored value still means what
+// 1.2.6 stored, so the two settings this fork re-defaults are inverted at the
+// load/store boundary.
+static bool s_start_timers_automatically = false;
 static bool s_delete_immediately = false;
 #ifdef PBL_COLOR
 // the app's accent colour. not a bool, so the false-is-default rule above
 // cannot name it; the job is done here instead -- this initialiser is the
 // shipped default, and an absent persist key leaves it alone
-static GColor s_highlight_color = GColorPictonBlue;
+static GColor s_highlight_color = GColorMalachite;
 #endif
 static int32_t s_countdown_timer_id_max = 0;
 static AppTimer *s_app_timer = NULL;
@@ -100,9 +105,9 @@ static const char *const s_setting_names[SettingCount] = {
 #endif
 };
 static const char *const s_setting_options[SettingCount][2] = {
-  { "Last Used",     "Duration"    },
-  { "Automatically", "Manually"    },
-  { "Confirm First", "Immediately" },
+  { "Duration",      "Last Used"     },
+  { "Manually",      "Automatically" },
+  { "Confirm First", "Immediately"   },
 #ifdef PBL_COLOR
   { NULL, NULL },  // Color's options are the palette below, not this table
 #endif
@@ -111,15 +116,17 @@ static const char *const s_setting_options[SettingCount][2] = {
 // the Color setting's options: eight of the sixty-four colours a colour
 // platform can actually render, covering the wheel so a choice reads as a
 // new direction, not a shade of the last one. the names are the SDK's.
-// index 0 is the shipped default, per the rule above.
+// index 0 is the shipped default, per the rule above: the table is rotated to
+// start there, which keeps the wheel-adjacent spacing intact -- Malachite wraps
+// back to Picton Blue.
 #define COLOR_OPTIONS 8
 static const char *const s_color_names[COLOR_OPTIONS] = {
-  "Picton Blue",    "Blue Moon",     "Vivid Violet",   "Brilliant Rose",
-  "Folly",          "Sunset Orange", "Chrome Yellow",  "Malachite",
+  "Malachite",      "Picton Blue",   "Blue Moon",      "Vivid Violet",
+  "Brilliant Rose", "Folly",         "Sunset Orange",  "Chrome Yellow",
 };
 static const GColor s_color_values[COLOR_OPTIONS] = {
-  GColorPictonBlue, GColorBlueMoon,  GColorVividViolet, GColorBrilliantRose,
-  GColorFolly,      GColorSunsetOrange, GColorChromeYellow, GColorMalachite,
+  GColorMalachite,  GColorPictonBlue, GColorBlueMoon,  GColorVividViolet,
+  GColorBrilliantRose, GColorFolly,   GColorSunsetOrange, GColorChromeYellow,
 };
 #endif
 
@@ -223,7 +230,7 @@ static void prv_sort_timers(CountdownTimer **timers, uint8_t count, TimerPrecede
  */
 
 static void prv_rebuild_timer_view_indices(void) {
-  if (!s_timer_sort_by_duration) {
+  if (s_timer_sort_by_last_used) {
     for (uint8_t i = 0; i < s_countdown_timers_count; i++) {
       s_timer_view_indices[i] = i;
     }
@@ -366,9 +373,9 @@ static void prv_apply_highlight_color(void) {
 static uint8_t prv_get_setting(SettingId setting) {
   switch (setting) {
     case SettingSortOrder:
-      return s_timer_sort_by_duration ? 1 : 0;
+      return s_timer_sort_by_last_used ? 1 : 0;
     case SettingStartTimers:
-      return s_start_timers_manually ? 1 : 0;
+      return s_start_timers_automatically ? 1 : 0;
     case SettingDelete:
       return s_delete_immediately ? 1 : 0;
 #ifdef PBL_COLOR
@@ -388,11 +395,11 @@ static uint8_t prv_get_setting(SettingId setting) {
 static void prv_set_setting(SettingId setting, uint8_t option) {
   switch (setting) {
     case SettingSortOrder:
-      s_timer_sort_by_duration = (option != 0);
+      s_timer_sort_by_last_used = (option != 0);
       prv_rebuild_timer_view_indices();
       break;
     case SettingStartTimers:
-      s_start_timers_manually = (option != 0);
+      s_start_timers_automatically = (option != 0);
       break;
     case SettingDelete:
       s_delete_immediately = (option != 0);
@@ -545,7 +552,7 @@ static void duration_window_complete_callback(int64_t duration, void *context) {
     // timer paused. The chokepoint skips a stop that is not a real transition,
     // so this is a true no-op -- a fresh timer is already paused and owns no
     // pin.
-    prv_set_timer_running(countdown_timer, !s_start_timers_manually);
+    prv_set_timer_running(countdown_timer, s_start_timers_automatically);
     // update visuals
     menu_window_reload_data(s_menu_window);
     menu_window_refresh(s_menu_window);
@@ -562,7 +569,7 @@ static void duration_window_complete_callback(int64_t duration, void *context) {
     countdown_timer_update(countdown_timer, duration, true);
     // the same setting governs edit as create: the timer lands in the state
     // the setting names either way
-    prv_set_timer_running(countdown_timer, !s_start_timers_manually);
+    prv_set_timer_running(countdown_timer, s_start_timers_automatically);
     detail_window_deep_refresh(s_detail_window);
     duration_window_pop(duration_window, true);
   }
@@ -855,10 +862,13 @@ static void initialize(void) {
     s_countdown_timer_id_max = persist_read_int(COUNTDOWN_TIMER_ID_PERSIST_KEY);
   }
   if (persist_exists(TIMER_SORT_BY_DURATION_PERSIST_KEY)) {
-    s_timer_sort_by_duration = (persist_read_int(TIMER_SORT_BY_DURATION_PERSIST_KEY) != 0);
+    // stored int keeps 1.2.6's meaning: 1 = sort by duration. this fork
+    // defaults to duration, so the variable is its inverse
+    s_timer_sort_by_last_used = (persist_read_int(TIMER_SORT_BY_DURATION_PERSIST_KEY) == 0);
   }
   if (persist_exists(TIMER_START_MANUALLY_PERSIST_KEY)) {
-    s_start_timers_manually = (persist_read_int(TIMER_START_MANUALLY_PERSIST_KEY) != 0);
+    // same contract: 1 = start manually, and the fork's default inverts it
+    s_start_timers_automatically = (persist_read_int(TIMER_START_MANUALLY_PERSIST_KEY) == 0);
   }
   if (persist_exists(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY)) {
     s_delete_immediately = (persist_read_int(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY) != 0);
@@ -1014,8 +1024,8 @@ static void deinitialize(void) {
   // persist state
   persist_write_int(PERSIST_VERSION_KEY, PERSIST_VERSION);
   persist_write_int(COUNTDOWN_TIMER_ID_PERSIST_KEY, s_countdown_timer_id_max);
-  persist_write_int(TIMER_SORT_BY_DURATION_PERSIST_KEY, s_timer_sort_by_duration ? 1 : 0);
-  persist_write_int(TIMER_START_MANUALLY_PERSIST_KEY, s_start_timers_manually ? 1 : 0);
+  persist_write_int(TIMER_SORT_BY_DURATION_PERSIST_KEY, s_timer_sort_by_last_used ? 0 : 1);
+  persist_write_int(TIMER_START_MANUALLY_PERSIST_KEY, s_start_timers_automatically ? 0 : 1);
   persist_write_int(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY, s_delete_immediately ? 1 : 0);
 #ifdef PBL_COLOR
   persist_write_int(TIMER_HIGHLIGHT_COLOR_PERSIST_KEY, s_highlight_color.argb);

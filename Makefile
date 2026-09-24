@@ -39,6 +39,9 @@ help:
 build:
 	pebble build
 
+sideload:
+	pebble install --phone
+
 # Guard the target: `make run PLAT=blsa` would otherwise hand the typo to the
 # pebble tool and fail at install time with a stranger error.
 run:
