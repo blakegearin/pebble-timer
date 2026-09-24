@@ -13,7 +13,7 @@
 #include "countdown_timer.h"
 #include "menu_window.h"
 #include "detail_window.h"
-#include "setting_window.h"
+#include "duration_window.h"
 #include "popup_window.h"
 #include "phone.h"
 
@@ -44,7 +44,7 @@
 
 static MenuWindow *s_menu_window = NULL;
 static DetailWindow *s_detail_window = NULL;
-static SettingWindow *s_setting_window = NULL;
+static DurationWindow *s_duration_window = NULL;
 static PopupWindow *s_popup_window = NULL;
 static uint8_t s_countdown_timers_count = 0;
 static CountdownTimer *s_countdown_timers[COUNTDOWN_TIMERS_MAX] = {};
@@ -316,16 +316,16 @@ static void popup_window_stop_timer_callback(void *context) {
 
 
 /*
- * SettingWindow complete callback
+ * DurationWindow complete callback
  * simple window to create or edit timer durations
  */
 
-static void setting_window_complete_callback(int64_t duration, void *context) {
-  SettingWindow *setting_window = (SettingWindow*)context;
-  CountdownTimer *countdown_timer = setting_window_get_timer(setting_window);
+static void duration_window_complete_callback(int64_t duration, void *context) {
+  DurationWindow *duration_window = (DurationWindow*)context;
+  CountdownTimer *countdown_timer = duration_window_get_timer(duration_window);
   // check if long enough
   if (duration < TIMER_MIN_LENGTH) {
-    setting_window_pop(setting_window, true);
+    duration_window_pop(duration_window, true);
     if (s_app_timer != NULL) {
       app_timer_reschedule(s_app_timer, MIN_REFRESH_DELAY);
     }
@@ -342,7 +342,7 @@ static void setting_window_complete_callback(int64_t duration, void *context) {
     menu_window_reload_data(s_menu_window);
     menu_window_refresh(s_menu_window);
     detail_window_set_countdown_timer(s_detail_window, countdown_timer);
-    setting_window_pop(setting_window, false);
+    duration_window_pop(duration_window, false);
     detail_window_push(s_detail_window, true);
     detail_window_deep_refresh(s_detail_window);
 
@@ -354,7 +354,7 @@ static void setting_window_complete_callback(int64_t duration, void *context) {
     countdown_timer_update(countdown_timer, duration, true);
     countdown_timer_start(countdown_timer);
     detail_window_deep_refresh(s_detail_window);
-    setting_window_pop(setting_window, true);
+    duration_window_pop(duration_window, true);
     // deal with timeline
     phone_delete_pin(countdown_timer);
     if (countdown_timer_get_duration(countdown_timer) >= TIMELINE_MIN_LENGTH) {
@@ -383,8 +383,8 @@ static void setting_window_complete_callback(int64_t duration, void *context) {
  */
 
 static void detail_window_edit_timer_callback(CountdownTimer *countdown_timer, void *context) {
-  setting_window_set_timer(s_setting_window, countdown_timer);
-  setting_window_push(s_setting_window, true);
+  duration_window_set_timer(s_duration_window, countdown_timer);
+  duration_window_push(s_duration_window, true);
 
   // log activity
   s_last_activity = countdown_timer_get_epoch_ms();
@@ -525,8 +525,8 @@ static bool menu_window_get_sort_by_duration_callback(void *context) {
 static void menu_window_click_callback(uint8_t index, void *context) {
   // add a timer if on the "+", otherwise, open the detailed view
   if (index == 0) {
-    setting_window_set_timer(s_setting_window, NULL);
-    setting_window_push(s_setting_window, true);
+    duration_window_set_timer(s_duration_window, NULL);
+    duration_window_push(s_duration_window, true);
   } else if (menu_window_row_is_sort_toggle(s_menu_window, index)) {
     // toggle between recency and duration ordering
     s_timer_sort_by_duration = !s_timer_sort_by_duration;
@@ -608,12 +608,12 @@ static void initialize(void) {
   s_detail_window = detail_window_create(detail_callbacks);
   detail_window_set_highlight_color(s_detail_window,PBL_IF_COLOR_ELSE(GColorPictonBlue, GColorWhite));
 
-  // create setting window
-  SettingWindowCallbacks setting_callbacks = {
-    .setting_complete = setting_window_complete_callback,
+  // create duration window
+  DurationWindowCallbacks duration_callbacks = {
+    .duration_complete = duration_window_complete_callback,
   };
-  s_setting_window = setting_window_create(setting_callbacks);
-  setting_window_set_highlight_color(s_setting_window, PBL_IF_COLOR_ELSE(GColorPictonBlue, GColorBlack));
+  s_duration_window = duration_window_create(duration_callbacks);
+  duration_window_set_highlight_color(s_duration_window, PBL_IF_COLOR_ELSE(GColorPictonBlue, GColorBlack));
 
   // create pop-up window
   PopupWindowCallbacks popup_callbacks = {
@@ -638,10 +638,10 @@ static void initialize(void) {
     }
   }
 
-  // open the setting screen if no timers
+  // open the duration picker if no timers
   if (s_countdown_timers_count == 0) {
-    setting_window_set_timer(s_setting_window, NULL);
-    setting_window_push(s_setting_window, true);
+    duration_window_set_timer(s_duration_window, NULL);
+    duration_window_push(s_duration_window, true);
   }
 
   // start the main update timer
@@ -723,7 +723,7 @@ static void deinitialize(void) {
 
   // destroy classes
   popup_window_destroy(s_popup_window);
-  setting_window_destroy(s_setting_window);
+  duration_window_destroy(s_duration_window);
   detail_window_destroy(s_detail_window);
   menu_window_destroy(s_menu_window);
   countdown_timer_list_destroy_all(s_countdown_timers, &s_countdown_timers_count);
