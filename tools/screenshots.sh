@@ -17,6 +17,13 @@
 #   -w, --wipe            wipe emulator data first, so the scene starts from a
 #                         known empty state (no saved timers, no saved settings)
 #   -k, --keep-running    leave the emulator up when the scene ends
+#   -n, --no-install      do not build or install this app; drive whatever is
+#                         already on screen. Use it to capture the firmware's
+#                         own UI (the system settings, say) for reference.
+#   -t, --time HH:MM:SS   pin the emulated clock before the scene runs (default
+#                         10:09:00; pass "none" to leave the clock alone). The
+#                         emulator often ignores this, so --baseline diffs also
+#                         chop the top 20px status band before comparing.
 #
 # Scene file: one command per line, '#' starts a comment.
 #
@@ -36,7 +43,10 @@ OUT=""
 BASELINE=""
 WIPE=0
 KEEP=0
-SETTLE=1.3   # seconds after a press before the display is worth capturing
+NO_INSTALL=0
+FIXED_TIME=10:09:00   # the clock every Pebble marketing shot uses
+SETTLE=1.3        # seconds after a press before the display is worth capturing
+STATUS_BAND=20    # px of status bar ignored when diffing against a baseline
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -47,6 +57,8 @@ while [[ $# -gt 0 ]]; do
     -b|--baseline) BASELINE="$2"; shift 2 ;;
     -w|--wipe) WIPE=1; shift ;;
     -k|--keep-running) KEEP=1; shift ;;
+    -n|--no-install) NO_INSTALL=1; shift ;;
+    -t|--time) FIXED_TIME="$2"; shift 2 ;;
     -h|--help) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) die "unknown option $1" ;;
     *) SCENE="$1"; shift ;;
@@ -82,17 +94,31 @@ if [[ $WIPE -eq 1 ]]; then
   rm -rf "$SDK_DATA"/*/"$PLATFORM"/app_cache 2>/dev/null || true
 fi
 
-echo "building for $PLATFORM"
-pebble build >/dev/null
+if [[ $NO_INSTALL -eq 0 ]]; then
+  echo "building for $PLATFORM"
+  pebble build >/dev/null
+fi
 
 # Attach the log stream *before* installing, so APP_LOG output from the app's
 # own startup (heap numbers, errors) lands in the file too. `pebble logs` boots
 # the emulator if it is not already up.
 ( emu logs > "$OUT/logs.txt" 2>&1 & )
 sleep "${BOOT_WAIT:-15}"
-echo "installing on $PLATFORM"
-emu install >/dev/null 2>&1
-sleep 4
+if [[ "$FIXED_TIME" != "none" ]]; then
+  # A ticking status bar makes every shot differ from every baseline, so freeze
+  # it. Timer rows still count down: scenes meant for --baseline should avoid
+  # running timers, or expect a handful of pixels of drift in those cells.
+  emu emu-set-time "$FIXED_TIME" >/dev/null 2>&1 || true
+fi
+
+if [[ $NO_INSTALL -eq 0 ]]; then
+  echo "installing on $PLATFORM"
+  emu install >/dev/null 2>&1
+  sleep 4
+fi
+
+TMPDIR_="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR_"' EXIT
 
 step=0
 drift=0
@@ -126,11 +152,17 @@ while IFS= read -r line || [[ -n "$line" ]]; do
       emu screenshot "$OUT/$name.png" --no-open >/dev/null 2>&1
       echo "  shot $name"
       if [[ -n "$BASELINE" && -f "$BASELINE/$name.png" && $HAVE_MAGICK -eq 1 ]]; then
-        px="$(magick compare -metric AE "$BASELINE/$name.png" "$OUT/$name.png" null: 2>&1 || true)"
-        px="${px%%.*}"
+        # The top band is the firmware's status bar -- its clock is not our UI
+        # and would otherwise make every shot differ. Chop it off both sides of
+        # the comparison rather than trying to freeze the emulated clock, which
+        # emu-set-time does not do reliably.
+        magick "$BASELINE/$name.png" -gravity North -chop 0x"$STATUS_BAND" "$TMPDIR_/base.png"
+        magick "$OUT/$name.png" -gravity North -chop 0x"$STATUS_BAND" "$TMPDIR_/shot.png"
+        px="$(magick compare -metric AE "$TMPDIR_/base.png" "$TMPDIR_/shot.png" null: 2>&1 || true)"
+        px="${px%%[ (]*}"   # compare prints "553 (0.008)"; keep the count
         if [[ "$px" != "0" ]]; then
           echo "     CHANGED vs baseline: $px pixels differ"
-          magick compare "$BASELINE/$name.png" "$OUT/$name.png" "$OUT/$name.diff.png" 2>/dev/null || true
+          magick compare "$TMPDIR_/base.png" "$TMPDIR_/shot.png" "$OUT/$name.diff.png" 2>/dev/null || true
           drift=$((drift+1))
         fi
       fi

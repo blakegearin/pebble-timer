@@ -1,0 +1,6 @@
+# The timer list with nothing in it. Nothing on screen ticks, so with the clock
+# pinned this scene is pixel-deterministic -- it is the one to point --baseline
+# at when checking a change against the fork's base branch.
+
+press back          # leave the picker an empty app opens with
+shot menu
