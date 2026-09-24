@@ -41,7 +41,7 @@ A "timer index" in a `menu_window` signature is a **view** index.
 
 Six targets: `aplite` (Pebble/Pebble Steel), `basalt` (Time/Time Steel),
 `chalk` (Time Round), `diorite` (Pebble 2), `emery` (Time 2),
-`gabbro` (Core 2 Duo).
+`gabbro` (2 Duo, renamed from Core 2 Duo).
 
 The one line that matters: **aplite is the 24 KB platform, where compiled code
 lives in the same budget as data.** Adding a window there costs RAM even if it

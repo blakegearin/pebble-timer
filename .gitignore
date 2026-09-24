@@ -11,3 +11,5 @@ compile_commands.json
 .vscode/
 .cache/
 tmp/shots/
+logs.txt
+contact-sheet.png
