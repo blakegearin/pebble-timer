@@ -1,0 +1,13 @@
+# Aplite's variant of the readme tour: the settings live as inline rows, so
+# there is no settings or options shot to take -- the third shot is one row
+# flipped to its second option.
+press select        # off hours
+press up 5          # five minutes
+press select        # off minutes
+press select        # confirm -- detail opens
+shot detail
+press back          # menu: +, the timer, and the three settings rows
+shot menu
+press down 2        # to the Sort Order row (cursor is on the timer row)
+press select        # flip it in place
+shot flipped

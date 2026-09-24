@@ -1,0 +1,19 @@
+# The app's screens on the five sub-menu platforms, from a wiped state.
+# Used to refresh assets/screenshots/<platform>/ and as the settings-feature
+# regression scene:
+#
+#   tools/screenshots.sh -p basalt -w -o tmp/shots/readme tools/scenes/readme-tour.scene
+
+note 25-minute timer so the pin branch is live in the detail shot
+press select        # off hours
+press up 25         # twenty-five minutes
+press select        # off minutes
+press select        # confirm -- detail opens
+shot detail
+press back          # menu, cursor on the timer row
+press down          # to the cog row
+shot menu
+press select        # Settings
+shot settings
+press select        # the Sort Order radio list
+shot options
