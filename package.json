@@ -1,10 +1,13 @@
 {
-  "version": "1.3.0",
-  "author": "Pebble",
+  "version": "1.0.0",
+  "author": "Blake Gearin",
   "private": true,
   "dependencies": {},
   "keywords": [
-    "pebble-app"
+    "pebble-app",
+    "timer",
+    "app",
+    "configurable"
   ],
   "pebble": {
     "sdkVersion": "3",
@@ -117,7 +120,7 @@
       ]
     },
     "projectType": "native",
-    "uuid": "c64aae42-b822-4d6d-995b-bc7c38e843f4",
+    "uuid": "1ceb660e-1829-4fcc-96b4-2a3cc642d22f",
     "messageKeys": {
       "KEY_TOTAL_TIME": 15,
       "KEY_UNIQUEID": 10,
