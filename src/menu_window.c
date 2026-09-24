@@ -12,10 +12,15 @@
  *      bool        menu_window_get_topmost_window(MenuWindow *menu_window);
  *      void        menu_window_refresh(MenuWindow *menu_window);
  *      void        menu_window_reload_data(MenuWindow *menu_window);
- *      void        menu_window_select_row(MenuWindow *menu_window, uint8_t row);
- *      bool        menu_window_row_is_sort_toggle(MenuWindow *menu_window,
+ *      void        menu_window_select_row(MenuWindow *menu_window,
+ *                      uint8_t row);
+ *      void        menu_window_select_timer_index(MenuWindow *menu_window,
+ *                      uint8_t view_index);
+ *      MenuRowKind menu_window_row_kind(MenuWindow *menu_window,
  *                      uint8_t row);
  *      int16_t     menu_window_row_to_timer_index(MenuWindow *menu_window,
+ *                      uint8_t row);
+ *      int16_t     menu_window_row_to_setting_index(MenuWindow *menu_window,
  *                      uint8_t row);
  *      void        menu_window_set_highlight_color(MenuWindow *menu_window,
  *                      GColor color);
@@ -27,6 +32,7 @@
 #include <pebble.h>
 #include "menu_window.h"
 #include "countdown_timer.h"
+#include "settings.h"
 
 // Constants
 #ifdef PBL_ROUND
@@ -55,8 +61,8 @@
 struct MenuWindow {
   Window      *window;    //< main window
   MenuLayer   *menu;      //< menu layer displaying timer list
-  TextLayer   *text;      //< text layer which displays "No Timers"
   GBitmap     *play_icon, *pause_icon;    //< menu layer icons
+  GBitmap     *settings_icon;             //< cog row icon, never created on aplite
   StatusBarLayer      *status;            //< status bar for Basalt
   MenuWindowCallbacks callbacks;          //< menu layer callbacks
 };
@@ -81,21 +87,22 @@ static uint16_t menu_get_num_sections_callback(MenuLayer *menu_layer, void *cont
 /*
  * row layout of the menu list, in one place
  *
- * rows are [0] the "+" add cell, [1..timer_count] the timers, and finally the
- * sort toggle -- which is only shown once there are at least two timers to
- * reorder. every site that maps between rows and timers goes through these.
+ * rows are [0] the "+" add cell, [1..timer_count] the timers, and below them
+ * either the permanent cog row or, on aplite, one permanent row per setting.
+ * every site that maps between rows and timers classifies through
+ * menu_window_row_kind.
  */
 
 static uint8_t menu_get_timer_count(MenuWindow *menu_window) {
   return menu_window->callbacks.get_timer_count(menu_window);
 }
 
-static bool menu_has_sort_row(MenuWindow *menu_window) {
-  return menu_get_timer_count(menu_window) >= 2;
-}
-
 static uint16_t menu_get_row_count(MenuWindow *menu_window) {
-  return menu_get_timer_count(menu_window) + (menu_has_sort_row(menu_window) ? 2 : 1);
+#ifdef PBL_PLATFORM_APLITE
+  return menu_get_timer_count(menu_window) + 1 + SettingCount;
+#else
+  return menu_get_timer_count(menu_window) + 2;
+#endif
 }
 
 
@@ -191,42 +198,57 @@ static void menu_draw_row_callback(GContext* ctx, const Layer *cell_layer, MenuI
                                    void *context) {
   // get properties
   MenuWindow *menu_window = (MenuWindow *) context;
-  // draw contents, with "+" in first cell
-  if (cell_index->row == 0) {
-    menu_cell_draw(ctx, cell_layer, "+", NULL, 0, fonts_get_system_font(FONT_KEY_GOTHIC_28),
-      true, GColorBlack, GColorWhite);
-  } else if (menu_window_row_is_sort_toggle(menu_window, cell_index->row)) {
-    char *title = menu_window->callbacks.get_sort_by_duration(context) ? "Sort: Duration" :
-                                                                        "Sort: Recent";
-    menu_cell_draw(ctx, cell_layer, title, NULL, 0,
-                   fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD),
-                   true, GColorBlack, GColorWhite);
-  } else {
-    CountdownTimer *countdown_timer = menu_window->callbacks.get_timer(cell_index->row - 1,
-                                                                       context);
-    char *buff = countdown_timer_format_own_buff(countdown_timer);
-    GBitmap *icon = countdown_timer_get_paused(countdown_timer) ?
-                    menu_window->pause_icon : menu_window->play_icon;
-    GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
-    int32_t progress = TRIG_MAX_ANGLE * countdown_timer_get_current_time(countdown_timer) /
-      countdown_timer_get_duration(countdown_timer);
-    if (progress >= TRIG_MAX_ANGLE) {
-      progress = 0;
+  // draw contents by row kind
+  switch (menu_window_row_kind(menu_window, cell_index->row)) {
+    case MenuRowAdd: {
+      menu_cell_draw(ctx, cell_layer, "+", NULL, 0, fonts_get_system_font(FONT_KEY_GOTHIC_28),
+        true, GColorBlack, GColorWhite);
+      break;
     }
-    GColor progress_bg_color = PBL_IF_COLOR_ELSE(GColorWhite, GColorLightGray);
-    GColor progress_fg_color  = PBL_IF_COLOR_ELSE(GColorBlack, GColorWhite);
-    if (!menu_cell_layer_is_highlighted(cell_layer)) {
+    case MenuRowTimer: {
+      CountdownTimer *countdown_timer = menu_window->callbacks.get_timer(cell_index->row - 1,
+                                                                         context);
+      char *buff = countdown_timer_format_own_buff(countdown_timer);
+      GBitmap *icon = countdown_timer_get_paused(countdown_timer) ?
+                      menu_window->pause_icon : menu_window->play_icon;
+      GFont font = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
+      int32_t progress = TRIG_MAX_ANGLE * countdown_timer_get_current_time(countdown_timer) /
+        countdown_timer_get_duration(countdown_timer);
+      if (progress >= TRIG_MAX_ANGLE) {
+        progress = 0;
+      }
+      GColor progress_bg_color = PBL_IF_COLOR_ELSE(GColorWhite, GColorLightGray);
+      GColor progress_fg_color  = PBL_IF_COLOR_ELSE(GColorBlack, GColorWhite);
+      if (!menu_cell_layer_is_highlighted(cell_layer)) {
 #ifdef PBL_BW
-      progress_fg_color  = GColorBlack;
+        progress_fg_color  = GColorBlack;
 #else
-      progress_bg_color = GColorLightGray;
+        progress_bg_color = GColorLightGray;
 #ifdef PBL_ROUND
-      progress = 0;
+        progress = 0;
 #endif
 #endif
+      }
+      menu_cell_draw(ctx, cell_layer, buff, icon, progress, font, MENU_CELL_CENTERED, progress_fg_color,
+        progress_bg_color);
+      break;
     }
-    menu_cell_draw(ctx, cell_layer, buff, icon, progress, font, MENU_CELL_CENTERED, progress_fg_color,
-      progress_bg_color);
+    case MenuRowSettings: {
+      // the row carries no label: the cog alone, centred the way the "+" row is.
+      // it wants the "+" row's centring everywhere, not MENU_CELL_CENTERED.
+      menu_cell_draw(ctx, cell_layer, NULL, menu_window->settings_icon, 0,
+        fonts_get_system_font(FONT_KEY_GOTHIC_28), true, GColorBlack, GColorWhite);
+      break;
+    }
+    case MenuRowSetting: {
+      // two-line cell, bold name over current value, fonts and layout by the
+      // system. no font handling on our side, on purpose.
+      const int16_t setting = menu_window_row_to_setting_index(menu_window, cell_index->row);
+      menu_cell_basic_draw(ctx, cell_layer,
+        menu_window->callbacks.get_setting_name(setting, context),
+        menu_window->callbacks.get_setting_value(setting, context), NULL);
+      break;
+    }
   }
 }
 
@@ -237,7 +259,8 @@ static void menu_draw_row_callback(GContext* ctx, const Layer *cell_layer, MenuI
 
 static void menu_select_callback(MenuLayer *menu_layer, MenuIndex *cell_index, void *context) {
   MenuWindow *menu_window = (MenuWindow*)context;
-  menu_window->callbacks.clicked(cell_index->row, context);
+  menu_window->callbacks.clicked(menu_window_row_kind(menu_window, cell_index->row),
+    cell_index->row, context);
 }
 
 
@@ -249,12 +272,22 @@ static void menu_select_callback(MenuLayer *menu_layer, MenuIndex *cell_index, v
 static MenuWindow *menu_window_init(MenuWindow *menu_window,
                                     MenuWindowCallbacks menu_window_callbacks, bool animated) {
   // load resources
+  menu_window->settings_icon = NULL;
   menu_window->play_icon = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_PLAY_TRANS_WHITE);
   menu_window->pause_icon = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_PAUSE_TRANS_WHITE);
+#ifndef PBL_PLATFORM_APLITE
+  // aplite has no cog row, so it must not pay the bitmap's heap cost
+  menu_window->settings_icon = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_SETTINGS_WHITE);
+#endif
   // create window
   menu_window->window = window_create();
   menu_window->callbacks = menu_window_callbacks;
-  if (menu_window->play_icon && menu_window->pause_icon && menu_window->window) {
+#ifdef PBL_PLATFORM_APLITE
+  bool icons_ok = (menu_window->play_icon && menu_window->pause_icon);
+#else
+  bool icons_ok = (menu_window->play_icon && menu_window->pause_icon && menu_window->settings_icon);
+#endif
+  if (icons_ok && menu_window->window) {
     // get window parameters
     Layer *root = window_get_root_layer(menu_window->window);
     GRect bounds = layer_get_frame(root);
@@ -279,17 +312,6 @@ static MenuWindow *menu_window_init(MenuWindow *menu_window,
     });
     menu_layer_set_click_config_onto_window(menu_window->menu, menu_window->window);
     layer_add_child(root, menu_layer_get_layer(menu_window->menu));
-    // create text layer
-#ifdef PBL_ROUND
-    menu_window->text = text_layer_create(GRect(0, 129, bounds.size.w, 20));
-#else
-    menu_window->text = text_layer_create(GRect(0, 85, bounds.size.w, 20));
-#endif
-    text_layer_set_text(menu_window->text, "No Timers");
-    text_layer_set_font(menu_window->text, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
-    text_layer_set_text_alignment(menu_window->text, GTextAlignmentCenter);
-    text_layer_set_background_color(menu_window->text, GColorClear);
-    layer_add_child(root, text_layer_get_layer(menu_window->text));
     // create status bar
     menu_window->status = status_bar_layer_create();
     status_bar_layer_set_colors(menu_window->status, GColorClear, GColorBlack);
@@ -336,11 +358,13 @@ MenuWindow *menu_window_create(MenuWindowCallbacks menu_window_callbacks, bool a
 void menu_window_destroy(MenuWindow *menu_window) {
   if (menu_window != NULL) {
     status_bar_layer_destroy(menu_window->status);
-    text_layer_destroy(menu_window->text);
     menu_layer_destroy(menu_window->menu);
     window_destroy(menu_window->window);
     gbitmap_destroy(menu_window->play_icon);
     gbitmap_destroy(menu_window->pause_icon);
+#ifndef PBL_PLATFORM_APLITE
+    gbitmap_destroy(menu_window->settings_icon);
+#endif
     free(menu_window);
     return;
   }
@@ -366,8 +390,6 @@ bool menu_window_get_topmost_window(MenuWindow *menu_window) {
 
 void menu_window_refresh(MenuWindow *menu_window) {
   layer_mark_dirty(menu_layer_get_layer(menu_window->menu));
-  uint8_t timer_count = menu_window->callbacks.get_timer_count(NULL);
-  layer_set_hidden(text_layer_get_layer(menu_window->text), timer_count != 0);
 }
 
 
@@ -377,7 +399,10 @@ void menu_window_refresh(MenuWindow *menu_window) {
  */
 
 void menu_window_reload_data(MenuWindow *menu_window) {
-  // this makes the selected index go back to the top, but this is also desired
+  // this makes the selected index go back to the top. that is desired after a
+  // delete, where the list really changed and "+" is the only survivor; the
+  // promote paths in main.c now override it, putting the cursor on the
+  // last-used timer afterwards via menu_window_select_timer_index.
   menu_layer_reload_data(menu_window->menu);
 }
 
@@ -398,11 +423,31 @@ void menu_window_select_row(MenuWindow *menu_window, uint8_t row) {
 
 
 /*
- * check whether a row is the sort toggle
+ * select the row displaying a given timer
  */
 
-bool menu_window_row_is_sort_toggle(MenuWindow *menu_window, uint8_t row) {
-  return menu_has_sort_row(menu_window) && row == menu_get_timer_count(menu_window) + 1;
+void menu_window_select_timer_index(MenuWindow *menu_window, uint8_t view_index) {
+  menu_window_select_row(menu_window, view_index + 1);
+}
+
+
+
+/*
+ * get what a menu row holds
+ */
+
+MenuRowKind menu_window_row_kind(MenuWindow *menu_window, uint8_t row) {
+  if (row == 0) {
+    return MenuRowAdd;
+  }
+  if (row <= menu_get_timer_count(menu_window)) {
+    return MenuRowTimer;
+  }
+#ifdef PBL_PLATFORM_APLITE
+  return MenuRowSetting;
+#else
+  return MenuRowSettings;
+#endif
 }
 
 
@@ -412,11 +457,25 @@ bool menu_window_row_is_sort_toggle(MenuWindow *menu_window, uint8_t row) {
  */
 
 int16_t menu_window_row_to_timer_index(MenuWindow *menu_window, uint8_t row) {
-  if (row == 0 || menu_window_row_is_sort_toggle(menu_window, row) ||
-      row > menu_get_timer_count(menu_window)) {
+  if (menu_window_row_kind(menu_window, row) != MenuRowTimer) {
     return -1;
   }
   return (int16_t)row - 1;
+}
+
+
+
+/*
+ * map an aplite settings row onto its setting, or -1 if the row does not hold
+ * one. off aplite the classifier never returns MenuRowSetting, so this always
+ * answers -1 there.
+ */
+
+int16_t menu_window_row_to_setting_index(MenuWindow *menu_window, uint8_t row) {
+  if (menu_window_row_kind(menu_window, row) != MenuRowSetting) {
+    return -1;
+  }
+  return (int16_t)(row - menu_get_timer_count(menu_window) - 1);
 }
 
 

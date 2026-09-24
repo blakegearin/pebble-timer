@@ -16,11 +16,19 @@
 #include "duration_window.h"
 #include "popup_window.h"
 #include "phone.h"
+#include "settings.h"
+#include "settings_window.h"
+#include "option_window.h"
 
 // constants
 #define COUNTDOWN_TIMER_PERSIST_KEY 72445846
 #define COUNTDOWN_TIMER_ID_PERSIST_KEY 3568356
+// this key's *value* is part of the on-flash contract: 1.2.6 users already have
+// their sort preference stored under 9938472, so renaming the #define is fine
+// but changing the integer would silently drop their choice on upgrade.
 #define TIMER_SORT_BY_DURATION_PERSIST_KEY 9938472
+#define TIMER_START_MANUALLY_PERSIST_KEY 51827394
+#define TIMER_DELETE_IMMEDIATELY_PERSIST_KEY 68013925
 #define PERSIST_VERSION 1
 #define PERSIST_VERSION_KEY 46134672
 #define COUNTDOWN_TIMERS_MAX 8
@@ -46,13 +54,46 @@ static MenuWindow *s_menu_window = NULL;
 static DetailWindow *s_detail_window = NULL;
 static DurationWindow *s_duration_window = NULL;
 static PopupWindow *s_popup_window = NULL;
+#ifndef PBL_PLATFORM_APLITE
+// aplite renders the settings as inline rows in the timer list instead of
+// these two windows, and cannot afford either one's .text
+static SettingsWindow *s_settings_window = NULL;
+static OptionWindow *s_option_window = NULL;
+// which setting s_option_window is currently pointed at, so the select
+// callback knows what it just changed
+static SettingId s_option_window_setting = SettingSortOrder;
+#endif
 static uint8_t s_countdown_timers_count = 0;
 static CountdownTimer *s_countdown_timers[COUNTDOWN_TIMERS_MAX] = {};
 static uint8_t s_timer_view_indices[COUNTDOWN_TIMERS_MAX] = {};
 static bool s_timer_sort_by_duration = false;
+// naming rule: every setting's bool is named so that false is the shipped
+// default. statics zero-initialise and an absent persist key leaves them
+// untouched, so "no key yet" means "today's behaviour" with no default table
+// to keep in sync -- and an upgrading user lands there automatically.
+static bool s_start_timers_manually = false;
+static bool s_delete_immediately = false;
 static int32_t s_countdown_timer_id_max = 0;
 static AppTimer *s_app_timer = NULL;
 static int64_t s_last_activity = 0;
+
+/*
+ * the copy, one home for all nine settings strings
+ *
+ * option index 0 is always the shipped default, which is what a zero value
+ * means. this is an enum and a string table, not the data-driven descriptor
+ * table the spec rejected -- it generates no UI. it exists because aplite
+ * renders the same three settings as rows in the timer list while the other
+ * platforms render them in the settings window: two renderers, one copy.
+ */
+static const char *const s_setting_names[SettingCount] = {
+  "Sort Order", "Start Timers", "Delete",
+};
+static const char *const s_setting_options[SettingCount][2] = {
+  { "Last Used",     "Duration"    },
+  { "Automatically", "Manually"    },
+  { "Confirm First", "Immediately" },
+};
 
 static uint16_t prv_get_next_refresh_delay(void) {
   if (popup_window_get_topmost_window(s_popup_window)) {
@@ -205,6 +246,23 @@ static void prv_promote_timer(CountdownTimer *countdown_timer) {
     s_countdown_timers[0] = countdown_timer;
   }
   prv_timers_changed();
+
+  /*
+   * the list opens with the cursor on the timer you last used
+   *
+   * the order is untouched -- a timer created paused still lands below every
+   * running one -- but selection follows use. all four acting paths (create,
+   * edit, play/pause, snooze) already funnel through here, so this one place
+   * covers them all. delete and timer-expiry never promote, and so never
+   * steal the cursor: a deleted timer has no row to land on, and an expired
+   * one gets the stronger signal of a PopupWindow.
+   */
+  for (uint8_t view = 0; view < s_countdown_timers_count; view++) {
+    if (s_countdown_timers[s_timer_view_indices[view]] == countdown_timer) {
+      menu_window_select_timer_index(s_menu_window, view);
+      break;
+    }
+  }
 }
 
 
@@ -223,6 +281,10 @@ static void prv_promote_timer(CountdownTimer *countdown_timer) {
  *     delete nothing.
  *   - start *before* sending the pin, so a pin is only ever sent for a timer
  *     that is definitively running.
+ *
+ * the pause half is guarded against a call that is not a real transition --
+ * pausing an already-paused timer, as "Manually" does on create, neither
+ * deletes a pin nor stops anything.
  */
 
 static void prv_set_timer_running(CountdownTimer *countdown_timer, bool running) {
@@ -236,10 +298,55 @@ static void prv_set_timer_running(CountdownTimer *countdown_timer, bool running)
       phone_send_pin(countdown_timer);
     }
   } else {
-    if (countdown_timer_get_duration(countdown_timer) >= TIMELINE_MIN_LENGTH) {
-      phone_delete_pin(countdown_timer);
+    // The pin is deleted on the running->paused *transition*, per the rule.
+    // When the timer is already paused -- creating under "Manually", or
+    // editing a timer that was already paused -- there is no transition and
+    // no pin, so delete nothing. countdown_timer_stop carries the same
+    // idempotence guard for the state itself.
+    if (!countdown_timer_get_paused(countdown_timer)) {
+      if (countdown_timer_get_duration(countdown_timer) >= TIMELINE_MIN_LENGTH) {
+        phone_delete_pin(countdown_timer);
+      }
+      countdown_timer_stop(countdown_timer, &s_countdown_timer_id_max);
     }
-    countdown_timer_stop(countdown_timer, &s_countdown_timer_id_max);
+  }
+}
+
+
+
+/*
+ * the only place the SettingId enum meets the bools behind it
+ */
+
+static uint8_t prv_get_setting(SettingId setting) {
+  switch (setting) {
+    case SettingSortOrder:
+      return s_timer_sort_by_duration ? 1 : 0;
+    case SettingStartTimers:
+      return s_start_timers_manually ? 1 : 0;
+    case SettingDelete:
+      return s_delete_immediately ? 1 : 0;
+    default:
+      return 0;
+  }
+}
+
+static void prv_set_setting(SettingId setting, uint8_t option) {
+  switch (setting) {
+    case SettingSortOrder:
+      s_timer_sort_by_duration = (option != 0);
+      prv_rebuild_timer_view_indices();
+      break;
+    case SettingStartTimers:
+      s_start_timers_manually = (option != 0);
+      break;
+    case SettingDelete:
+      s_delete_immediately = (option != 0);
+      // the detail window owns the arming, so hand it the new value now
+      detail_window_set_delete_immediately(s_detail_window, s_delete_immediately);
+      break;
+    default:
+      break;
   }
 }
 
@@ -327,6 +434,7 @@ static void popup_window_snooze_timer_callback(CountdownTimer *countdown_timer, 
   // show detail if not on top
   if (!detail_window_get_topmost_window(s_detail_window)) {
     detail_window_set_countdown_timer(s_detail_window, countdown_timer);
+    detail_window_set_delete_immediately(s_detail_window, s_delete_immediately);
     detail_window_push(s_detail_window, false);
   }
   detail_window_deep_refresh(s_detail_window);
@@ -373,11 +481,16 @@ static void duration_window_complete_callback(int64_t duration, void *context) {
     countdown_timer = countdown_timer_create(duration, &s_countdown_timer_id_max);
     countdown_timer_list_add(s_countdown_timers, COUNTDOWN_TIMERS_MAX,
       &s_countdown_timers_count, countdown_timer);
-    prv_set_timer_running(countdown_timer, true);
+    // Start Timers is absolute: under Manually the create path lands the
+    // timer paused. The chokepoint skips a stop that is not a real transition,
+    // so this is a true no-op -- a fresh timer is already paused and owns no
+    // pin.
+    prv_set_timer_running(countdown_timer, !s_start_timers_manually);
     // update visuals
     menu_window_reload_data(s_menu_window);
     menu_window_refresh(s_menu_window);
     detail_window_set_countdown_timer(s_detail_window, countdown_timer);
+    detail_window_set_delete_immediately(s_detail_window, s_delete_immediately);
     duration_window_pop(duration_window, false);
     detail_window_push(s_detail_window, true);
     detail_window_deep_refresh(s_detail_window);
@@ -387,12 +500,14 @@ static void duration_window_complete_callback(int64_t duration, void *context) {
     // and only the old duration passes the guard that deletes it
     prv_set_timer_running(countdown_timer, false);
     countdown_timer_update(countdown_timer, duration, true);
-    prv_set_timer_running(countdown_timer, true);
+    // the same setting governs edit as create: the timer lands in the state
+    // the setting names either way
+    prv_set_timer_running(countdown_timer, !s_start_timers_manually);
     detail_window_deep_refresh(s_detail_window);
     duration_window_pop(duration_window, true);
   }
 
-  // float the just-used timer to the top of the list
+  // keep the list in order and put the cursor on the timer just used
   prv_promote_timer(countdown_timer);
 
   // refresh now
@@ -428,7 +543,7 @@ static void detail_window_edit_timer_callback(CountdownTimer *countdown_timer, v
 
 static void detail_window_playpause_timer_callback(CountdownTimer *countdown_timer, void *context) {
   prv_set_timer_running(countdown_timer, countdown_timer_get_paused(countdown_timer));
-  // float the just-used timer to the top of the list
+  // keep the list in order and put the cursor on the timer just used
   prv_promote_timer(countdown_timer);
   // refresh DetailWindow
   detail_window_deep_refresh(s_detail_window);
@@ -519,13 +634,66 @@ static uint8_t menu_window_get_timer_count_callback(void *context) {
 
 
 /*
- * MenuWindow get sort by duration callback
- * reports which ordering the menu list should show
+ * Settings copy callbacks
+ *
+ * one pair feeds both renderers of the settings: the inline rows in
+ * menu_window (only ever drawn on aplite) and, on every other platform,
+ * the settings window.
  */
 
-static bool menu_window_get_sort_by_duration_callback(void *context) {
-  return s_timer_sort_by_duration;
+static const char *settings_name_callback(uint8_t setting, void *context) {
+  if (setting < SettingCount) {
+    return s_setting_names[setting];
+  }
+  // error handling
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Attempted to access setting outside the enum");
+  return "";
 }
+
+static const char *settings_value_callback(uint8_t setting, void *context) {
+  if (setting < SettingCount) {
+    return s_setting_options[setting][prv_get_setting((SettingId)setting)];
+  }
+  // error handling
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Attempted to access setting outside the enum");
+  return "";
+}
+
+
+
+#ifndef PBL_PLATFORM_APLITE
+
+/*
+ * SettingsWindow clicked callback
+ * re-point the one option window at the clicked setting and open it
+ */
+
+static void settings_window_clicked_callback(uint8_t setting, void *context) {
+  s_option_window_setting = (SettingId)setting;
+  option_window_push(s_option_window, s_setting_names[setting], s_setting_options[setting],
+    2, prv_get_setting((SettingId)setting), true);
+}
+
+
+
+/*
+ * OptionWindow selected callback
+ *
+ * the option window has already popped itself by the time this runs, so the
+ * settings window is the topmost again and shows the new value immediately.
+ * the timer list underneath needs no touch: the MenuLayer redraws the rows
+ * through the view mapping as soon as it is topmost again.
+ */
+
+static void option_window_selected_callback(uint8_t option, void *context) {
+  prv_set_setting(s_option_window_setting, option);
+  settings_window_refresh(s_settings_window);
+
+  // log activity
+  s_last_activity = countdown_timer_get_epoch_ms();
+}
+
+#endif  // PBL_PLATFORM_APLITE
 
 
 
@@ -533,35 +701,59 @@ static bool menu_window_get_sort_by_duration_callback(void *context) {
  * MenuWindow click callback
  */
 
-static void menu_window_click_callback(uint8_t index, void *context) {
-  // add a timer if on the "+", otherwise, open the detailed view
-  if (index == 0) {
-    duration_window_set_timer(s_duration_window, NULL);
-    duration_window_push(s_duration_window, true);
-  } else if (menu_window_row_is_sort_toggle(s_menu_window, index)) {
-    // toggle between recency and duration ordering
-    s_timer_sort_by_duration = !s_timer_sort_by_duration;
-    prv_rebuild_timer_view_indices();
-    menu_window_reload_data(s_menu_window);
-    // reloading drops the selection back to the "+" row, but the toggle lives at
-    // the bottom of the list, so put the user back on it
-    menu_window_select_row(s_menu_window, index);
-    menu_window_refresh(s_menu_window);
-  } else {
-    // show timer in detail window
-    const int16_t view_index = menu_window_row_to_timer_index(s_menu_window, index);
-    if (view_index < 0) {
-      return;
+static void menu_window_click_callback(MenuRowKind kind, uint8_t row, void *context) {
+  switch (kind) {
+    case MenuRowAdd: {
+      // add a timer: open the duration picker with no timer to edit
+      duration_window_set_timer(s_duration_window, NULL);
+      duration_window_push(s_duration_window, true);
+      break;
     }
-    CountdownTimer *countdown_timer = menu_window_get_timer_callback((uint8_t)view_index, context);
-    if (countdown_timer == NULL) {
-      return;
+    case MenuRowTimer: {
+      // show timer in detail window
+      const int16_t view_index = menu_window_row_to_timer_index(s_menu_window, row);
+      if (view_index < 0) {
+        break;
+      }
+      CountdownTimer *countdown_timer = menu_window_get_timer_callback((uint8_t)view_index,
+        context);
+      if (countdown_timer == NULL) {
+        break;
+      }
+      detail_window_set_countdown_timer(s_detail_window, countdown_timer);
+      detail_window_set_delete_immediately(s_detail_window, s_delete_immediately);
+      detail_window_push(s_detail_window, true);
+      detail_window_deep_refresh(s_detail_window);
+      if (s_app_timer != NULL) {
+        app_timer_reschedule(s_app_timer, MIN_REFRESH_DELAY);
+      }
+      break;
     }
-    detail_window_set_countdown_timer(s_detail_window, countdown_timer);
-    detail_window_push(s_detail_window, true);
-    detail_window_deep_refresh(s_detail_window);
-    if (s_app_timer != NULL) {
-      app_timer_reschedule(s_app_timer, MIN_REFRESH_DELAY);
+    case MenuRowSettings: {
+      // the cog row only exists off aplite, but the switch arms are compiled
+      // everywhere so the row model stays out of #ifdefs
+#ifndef PBL_PLATFORM_APLITE
+      settings_window_push(s_settings_window, true);
+#endif
+      break;
+    }
+    case MenuRowSetting: {
+      // on aplite a settings row flips in place, in one press
+      const int16_t setting = menu_window_row_to_setting_index(s_menu_window, row);
+      if (setting < 0) {
+        break;
+      }
+      prv_set_setting((SettingId)setting, prv_get_setting((SettingId)setting) ? 0 : 1);
+      if ((SettingId)setting == SettingSortOrder) {
+        // the timer order just changed, so reload -- which drops the
+        // selection back to the "+" row. put the user back on the row they
+        // just pressed.
+        menu_window_reload_data(s_menu_window);
+        menu_window_select_row(s_menu_window, row);
+      }
+      // the other two settings changed only row content, not row count
+      menu_window_refresh(s_menu_window);
+      break;
     }
   }
 
@@ -593,6 +785,12 @@ static void initialize(void) {
   if (persist_exists(TIMER_SORT_BY_DURATION_PERSIST_KEY)) {
     s_timer_sort_by_duration = (persist_read_int(TIMER_SORT_BY_DURATION_PERSIST_KEY) != 0);
   }
+  if (persist_exists(TIMER_START_MANUALLY_PERSIST_KEY)) {
+    s_start_timers_manually = (persist_read_int(TIMER_START_MANUALLY_PERSIST_KEY) != 0);
+  }
+  if (persist_exists(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY)) {
+    s_delete_immediately = (persist_read_int(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY) != 0);
+  }
   // cancel wakeup
   wakeup_cancel_all();
 
@@ -603,7 +801,8 @@ static void initialize(void) {
   MenuWindowCallbacks menu_callbacks = {
     .get_timer = menu_window_get_timer_callback,
     .get_timer_count = menu_window_get_timer_count_callback,
-    .get_sort_by_duration = menu_window_get_sort_by_duration_callback,
+    .get_setting_name = settings_name_callback,
+    .get_setting_value = settings_value_callback,
     .clicked = menu_window_click_callback,
   };
   s_menu_window = menu_window_create(menu_callbacks, true);
@@ -634,6 +833,23 @@ static void initialize(void) {
   s_popup_window = popup_window_create();
   popup_window_set_action_bar_callbacks(s_popup_window, popup_callbacks);
 
+  // create settings and option windows
+  // aplite has neither: its settings are inline rows in the timer list, and
+  // the two windows' .text does not fit in its 24 KB alongside the data
+#ifndef PBL_PLATFORM_APLITE
+  SettingsWindowCallbacks settings_callbacks = {
+    .get_name = settings_name_callback,
+    .get_value = settings_value_callback,
+    .clicked = settings_window_clicked_callback,
+  };
+  s_settings_window = settings_window_create(settings_callbacks);
+  settings_window_set_highlight_color(s_settings_window,
+    PBL_IF_COLOR_ELSE(GColorPictonBlue, GColorBlack));
+  s_option_window = option_window_create(option_window_selected_callback, NULL);
+  option_window_set_highlight_color(s_option_window,
+    PBL_IF_COLOR_ELSE(GColorPictonBlue, GColorBlack));
+#endif
+
   // check wakeup in case launched by pin
   if (launch_reason() == APP_LAUNCH_TIMELINE_ACTION) {
     uint32_t args = launch_get_args() % PIN_ACTION_CODE_TRUNCATION_LEVEL;
@@ -643,6 +859,7 @@ static void initialize(void) {
       if (countdown_timer != NULL) {
         // show timer in detail window
         detail_window_set_countdown_timer(s_detail_window, countdown_timer);
+        detail_window_set_delete_immediately(s_detail_window, s_delete_immediately);
         detail_window_push(s_detail_window, true);
         detail_window_deep_refresh(s_detail_window);
       }
@@ -657,6 +874,7 @@ static void initialize(void) {
 
   // start the main update timer
   s_app_timer = app_timer_register(prv_get_next_refresh_delay(), app_timer_callback, NULL);
+
 
   // log activity
   s_last_activity = countdown_timer_get_epoch_ms();
@@ -718,6 +936,8 @@ static void deinitialize(void) {
   persist_write_int(PERSIST_VERSION_KEY, PERSIST_VERSION);
   persist_write_int(COUNTDOWN_TIMER_ID_PERSIST_KEY, s_countdown_timer_id_max);
   persist_write_int(TIMER_SORT_BY_DURATION_PERSIST_KEY, s_timer_sort_by_duration ? 1 : 0);
+  persist_write_int(TIMER_START_MANUALLY_PERSIST_KEY, s_start_timers_manually ? 1 : 0);
+  persist_write_int(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY, s_delete_immediately ? 1 : 0);
   countdown_timer_list_save(s_countdown_timers, s_countdown_timers_count,
     COUNTDOWN_TIMER_PERSIST_KEY);
   // schedule the wakeup
@@ -734,6 +954,10 @@ static void deinitialize(void) {
 
   // destroy classes
   popup_window_destroy(s_popup_window);
+#ifndef PBL_PLATFORM_APLITE
+  option_window_destroy(s_option_window);
+  settings_window_destroy(s_settings_window);
+#endif
   duration_window_destroy(s_duration_window);
   detail_window_destroy(s_detail_window);
   menu_window_destroy(s_menu_window);

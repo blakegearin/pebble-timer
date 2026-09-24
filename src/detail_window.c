@@ -20,6 +20,8 @@
  *      void            detail_window_deep_refresh(DetailWindow *detail_window);
  *      void            detail_window_set_highlight_color(DetailWindow
  *                          *detail_window, GColor color);
+ *      void            detail_window_set_delete_immediately(DetailWindow
+ *                          *detail_window, bool immediately);
  *      bool            detail_window_get_update_needed(DetailWindow
  *                          *detail_window);
  *
@@ -66,6 +68,7 @@ struct DetailWindow {
 
   bool        delete_armed;               //< whether delete needs confirmation
   AppTimer   *delete_arm_timer;           //< timer to clear confirmation state
+  bool        delete_immediately;         //< whether the Delete setting skips arming
 };
 
 /*******************************************************************************
@@ -214,6 +217,12 @@ static void down_click_handler(ClickRecognizerRef recognizer, void *context) {
     // cancel confirmation
     prv_disarm_delete(detail_window, true);
     return;
+  }
+
+  if (detail_window->delete_immediately) {
+    // Delete: Immediately. DOWN is a straight delete on the first press, and
+    // the "Timer Deleted" popup still shows -- it is feedback, not a guard.
+    return detail_window->callbacks.delete_timer(detail_window->countdown_timer, context);
   }
 
   // arm delete confirmation
@@ -370,6 +379,7 @@ DetailWindow *detail_window_create(DetailWindowCallbacks detail_window_callbacks
     .callbacks = detail_window_callbacks,
     .delete_armed = false,
     .delete_arm_timer = NULL,
+    .delete_immediately = false,
   };
 
   return detail_window;
@@ -494,6 +504,22 @@ void detail_window_deep_refresh(DetailWindow *detail_window) {
 void detail_window_set_highlight_color(DetailWindow *detail_window,
                                        GColor color) {
   detail_window->highlight_color = color;
+}
+
+/*
+ * set whether DOWN deletes on the first press
+ *
+ * this is the Delete setting's arming behaviour, owned here and stored there:
+ * main.c calls this wherever the setting changes and wherever the window is
+ * pushed. when immediately is false, behaviour is exactly 3d4774f's armed
+ * action bar.
+ */
+
+void detail_window_set_delete_immediately(DetailWindow *detail_window, bool immediately) {
+  if (detail_window == NULL) {
+    return;
+  }
+  detail_window->delete_immediately = immediately;
 }
 
 /*

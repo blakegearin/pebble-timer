@@ -12,10 +12,15 @@
  *      bool        menu_window_get_topmost_window(MenuWindow *menu_window);
  *      void        menu_window_refresh(MenuWindow *menu_window);
  *      void        menu_window_reload_data(MenuWindow *menu_window);
- *      void        menu_window_select_row(MenuWindow *menu_window, uint8_t row);
- *      bool        menu_window_row_is_sort_toggle(MenuWindow *menu_window,
+ *      void        menu_window_select_row(MenuWindow *menu_window,
+ *                      uint8_t row);
+ *      void        menu_window_select_timer_index(MenuWindow *menu_window,
+ *                      uint8_t view_index);
+ *      MenuRowKind menu_window_row_kind(MenuWindow *menu_window,
  *                      uint8_t row);
  *      int16_t     menu_window_row_to_timer_index(MenuWindow *menu_window,
+ *                      uint8_t row);
+ *      int16_t     menu_window_row_to_setting_index(MenuWindow *menu_window,
  *                      uint8_t row);
  *      void        menu_window_set_highlight_color(MenuWindow *menu_window,
  *                      GColor color);
@@ -28,6 +33,31 @@
 
 #include <pebble.h>
 #include "countdown_timer.h"
+
+
+
+/*******************************************************************************
+ * ROW MODEL
+ */
+
+/*
+ * Enumeration:   MenuRowKind
+ * ---------------------------
+ * what a row of the menu list holds. the whole row layout of the window is
+ * decided by one classifier, menu_window_row_kind.
+ *
+ * MenuRowSettings is the cog row and is only ever returned off aplite;
+ * MenuRowSetting is one inline settings row and is only ever returned on
+ * aplite. Both values are compiled everywhere: an unused enumerator costs
+ * nothing and keeps the type out of #ifdefs.
+ */
+
+typedef enum {
+  MenuRowAdd,       //< the "+" row, always row 0
+  MenuRowTimer,     //< one timer
+  MenuRowSettings,  //< the cog row that opens the settings window
+  MenuRowSetting,   //< one inline setting row (aplite only)
+} MenuRowKind;
 
 
 
@@ -53,27 +83,36 @@ typedef CountdownTimer* (*MenuWindowGetTimer)(uint8_t index, void *context);
 
 typedef uint8_t (*MenuWindowGetTimerCount)(void *context);
 
+
+
 /*
- * Callback:    MenuWindowGetSortByDuration
- * -----------------------------------------
- * gets whether the menu list is currently sorted by timer length
- *
- * returns:
- *   true  = shortest timer first
- *   false = most recently used first, running timers above paused ones
+ * Callback:    MenuWindowGetSettingName
+ * -------------------------------------
+ * gets the display name of one setting, e.g. "Sort Order"
  */
 
-typedef bool (*MenuWindowGetSortByDuration)(void *context);
+typedef const char *(*MenuWindowGetSettingName)(uint8_t setting, void *context);
+
+
+
+/*
+ * Callback:    MenuWindowGetSettingValue
+ * --------------------------------------
+ * gets the label of the option a setting is currently set to
+ */
+
+typedef const char *(*MenuWindowGetSettingValue)(uint8_t setting, void *context);
 
 
 
 /*
  * Callback:    MenuWindowClickCallback
  * ------------------------------------
- * called when a timer is clicked on in the menu layer
+ * called when a row is clicked on in the menu layer, with the kind of row
+ * it was so main.c can switch on it instead of asking back
  */
 
-typedef void (*MenuWindowClickCallback)(uint8_t index, void *context);
+typedef void (*MenuWindowClickCallback)(MenuRowKind kind, uint8_t row, void *context);
 
 
 
@@ -81,12 +120,16 @@ typedef void (*MenuWindowClickCallback)(uint8_t index, void *context);
  * Structure:   MenuWindowCallbacks
  * --------------------------------
  * structure containing all MenuWindow callbacks
+ *
+ * the setting callbacks feed the inline settings rows and are wired on every
+ * platform, but only ever invoked on aplite.
  */
 
 typedef struct MenuWindowCallbacks {
   MenuWindowGetTimer get_timer;
   MenuWindowGetTimerCount get_timer_count;
-  MenuWindowGetSortByDuration get_sort_by_duration;
+  MenuWindowGetSettingName get_setting_name;
+  MenuWindowGetSettingValue get_setting_value;
   MenuWindowClickCallback clicked;
 } MenuWindowCallbacks;
 
@@ -189,17 +232,33 @@ void menu_window_select_row(MenuWindow *menu_window, uint8_t row);
 
 
 /*
- * Function:    menu_window_row_is_sort_toggle
+ * Function:    menu_window_select_timer_index
  * -------------------------------------------
- * checks whether a menu row holds the sort toggle rather than a timer
+ * move the menu layer's selection onto the row displaying a given timer.
+ * the inverse of menu_window_row_to_timer_index: the row layout is this
+ * window's business, so callers must not add one to a timer index themselves.
  *
- *  menu_window: a pointer to the window the row belongs to
- *  row: the row to check
- *
- * returns: true if the row is the sort toggle
+ *  menu_window: a pointer to the window whose selection to move
+ *  view_index: the view index of the timer to select
  */
 
-bool menu_window_row_is_sort_toggle(MenuWindow *menu_window, uint8_t row);
+void menu_window_select_timer_index(MenuWindow *menu_window, uint8_t view_index);
+
+
+
+/*
+ * Function:    menu_window_row_kind
+ * ---------------------------------
+ * gets what a menu row holds: the "+", a timer, the cog row (off aplite),
+ * or one inline setting row (on aplite)
+ *
+ *  menu_window: a pointer to the window the row belongs to
+ *  row: the row to classify
+ *
+ * returns: the MenuRowKind of the row
+ */
+
+MenuRowKind menu_window_row_kind(MenuWindow *menu_window, uint8_t row);
 
 
 
@@ -215,6 +274,21 @@ bool menu_window_row_is_sort_toggle(MenuWindow *menu_window, uint8_t row);
  */
 
 int16_t menu_window_row_to_timer_index(MenuWindow *menu_window, uint8_t row);
+
+
+
+/*
+ * Function:    menu_window_row_to_setting_index
+ * ---------------------------------------------
+ * maps an aplite settings row onto the setting it displays
+ *
+ *  menu_window: a pointer to the window the row belongs to
+ *  row: the row to map
+ *
+ * returns: the SettingId as an integer, or -1 if the row does not hold one
+ */
+
+int16_t menu_window_row_to_setting_index(MenuWindow *menu_window, uint8_t row);
 
 
 

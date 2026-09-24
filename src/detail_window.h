@@ -20,6 +20,8 @@
  *      void            detail_window_deep_refresh(DetailWindow *detail_window);
  *      void            detail_window_set_highlight_color(DetailWindow
  *                          *detail_window, GColor color);
+ *      void            detail_window_set_delete_immediately(DetailWindow
+ *                          *detail_window, bool immediately);
  *      bool            detail_window_get_update_needed(DetailWindow
  *                          *detail_window);
  *
@@ -217,6 +219,22 @@ void detail_window_deep_refresh(DetailWindow *detail_window);
  */
 
 void detail_window_set_highlight_color(DetailWindow *detail_window, GColor color);
+
+
+
+/*
+ * Function:    detail_window_set_delete_immediately
+ * -------------------------------------------------
+ * sets whether the DOWN button deletes the timer on the first press rather
+ * than arming a confirmation. when immediately is false, behaviour is the
+ * armed action bar exactly as it shipped; the 2500 ms auto-disarm and the
+ * "Timer Deleted" popup are unchanged in both positions.
+ *
+ *  detail_window: a pointer to the DetailWindow to configure
+ *  immediately: true to delete on the first DOWN press
+ */
+
+void detail_window_set_delete_immediately(DetailWindow *detail_window, bool immediately);
 
 
 
