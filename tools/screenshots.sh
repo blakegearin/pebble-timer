@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+#
+# Drive the Pebble emulator through a scripted scene and capture a screenshot at
+# each named step. Two uses:
+#
+#   1. Look at the app on a platform you do not own (round chalk, 1-bit aplite,
+#      big-font emery) without pressing buttons by hand.
+#   2. Visual regression: re-run a scene after a change and diff every shot
+#      against a committed baseline.
+#
+# Usage:
+#   tools/screenshots.sh [options] <scene-file>
+#
+#   -p, --platform PLAT   aplite|basalt|chalk|diorite|emery|gabbro (default basalt)
+#   -o, --out DIR         where shots land (default tmp/shots/<scene>/<platform>)
+#   -b, --baseline DIR    compare each shot against DIR/<name>.png and report drift
+#   -w, --wipe            wipe emulator data first, so the scene starts from a
+#                         known empty state (no saved timers, no saved settings)
+#   -k, --keep-running    leave the emulator up when the scene ends
+#
+# Scene file: one command per line, '#' starts a comment.
+#
+#   press <back|up|select|down> [count]   press a button, count times
+#   hold  <button> [ms]                   long press (default 1000ms)
+#   wait  <seconds>                       let an animation settle
+#   shot  <name>                          capture <name>.png
+#   note  <text>                          print a line to the console
+#
+# Requires: the pebble tool on PATH, and ImageMagick for the contact sheet and
+# the baseline diff (both are skipped with a warning if magick is missing).
+#
+set -euo pipefail
+
+PLATFORM=basalt
+OUT=""
+BASELINE=""
+WIPE=0
+KEEP=0
+SETTLE=1.3   # seconds after a press before the display is worth capturing
+
+die() { echo "error: $*" >&2; exit 1; }
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -p|--platform) PLATFORM="$2"; shift 2 ;;
+    -o|--out) OUT="$2"; shift 2 ;;
+    -b|--baseline) BASELINE="$2"; shift 2 ;;
+    -w|--wipe) WIPE=1; shift ;;
+    -k|--keep-running) KEEP=1; shift ;;
+    -h|--help) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -*) die "unknown option $1" ;;
+    *) SCENE="$1"; shift ;;
+  esac
+done
+
+[[ -n "${SCENE:-}" ]] || die "no scene file given (try --help)"
+[[ -f "$SCENE" ]] || die "no such scene file: $SCENE"
+command -v pebble >/dev/null || die "the pebble tool is not on PATH"
+HAVE_MAGICK=1
+command -v magick >/dev/null || { HAVE_MAGICK=0; echo "warning: no ImageMagick, skipping contact sheet and diffs" >&2; }
+
+SCENE_NAME="$(basename "${SCENE%.*}")"
+OUT="${OUT:-tmp/shots/$SCENE_NAME/$PLATFORM}"
+mkdir -p "$OUT"
+rm -f "$OUT"/*.png
+
+emu() { pebble "$@" --emulator "$PLATFORM"; }
+
+if [[ $WIPE -eq 1 ]]; then
+  # `pebble wipe` leaves the emulated flash alone, and that flash is where the
+  # app's persisted timers and settings live -- so drop it and let the emulator
+  # re-create a pristine one on the next launch.
+  echo "wiping $PLATFORM emulator data"
+  # `pebble kill` takes no --emulator flag: it stops every running emulator, and
+  # it has to stop this one before the flash file can be replaced, because a
+  # live qemu writes it back on exit.
+  pebble kill --force >/dev/null 2>&1 || true
+  sleep 2
+  SDK_DATA="${HOME}/Library/Application Support/Pebble SDK"
+  rm -f "$SDK_DATA"/*/"$PLATFORM"/qemu_spi_flash.bin 2>/dev/null || true
+  rm -rf "$SDK_DATA"/*/"$PLATFORM"/localstorage 2>/dev/null || true
+  rm -rf "$SDK_DATA"/*/"$PLATFORM"/app_cache 2>/dev/null || true
+fi
+
+echo "building for $PLATFORM"
+pebble build >/dev/null
+
+# Attach the log stream *before* installing, so APP_LOG output from the app's
+# own startup (heap numbers, errors) lands in the file too. `pebble logs` boots
+# the emulator if it is not already up.
+( emu logs > "$OUT/logs.txt" 2>&1 & )
+sleep "${BOOT_WAIT:-15}"
+echo "installing on $PLATFORM"
+emu install >/dev/null 2>&1
+sleep 4
+
+step=0
+drift=0
+while IFS= read -r line || [[ -n "$line" ]]; do
+  line="${line%%#*}"
+  line="$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  [[ -z "$line" ]] && continue
+  cmd="$(echo "$line" | awk '{print $1}')"
+  arg="$(echo "$line" | awk '{print $2}')"
+  rest="$(echo "$line" | cut -s -d' ' -f2-)"
+  case "$cmd" in
+    press)
+      count="${rest#* }"; [[ "$count" == "$rest" ]] && count=1
+      for ((i=0; i<count; i++)); do
+        emu emu-button click "$arg" >/dev/null 2>&1
+        sleep "$SETTLE"
+      done
+      ;;
+    hold)
+      ms="${rest#* }"; [[ "$ms" == "$rest" ]] && ms=1000
+      emu emu-button push "$arg" >/dev/null 2>&1
+      sleep "$(echo "$ms" | awk '{print $1/1000}')"
+      emu emu-button release "$arg" >/dev/null 2>&1
+      sleep "$SETTLE"
+      ;;
+    wait) sleep "$arg" ;;
+    note) echo "  -- $rest" ;;
+    shot)
+      step=$((step+1))
+      name="$(printf '%02d-%s' "$step" "$arg")"
+      emu screenshot "$OUT/$name.png" --no-open >/dev/null 2>&1
+      echo "  shot $name"
+      if [[ -n "$BASELINE" && -f "$BASELINE/$name.png" && $HAVE_MAGICK -eq 1 ]]; then
+        px="$(magick compare -metric AE "$BASELINE/$name.png" "$OUT/$name.png" null: 2>&1 || true)"
+        px="${px%%.*}"
+        if [[ "$px" != "0" ]]; then
+          echo "     CHANGED vs baseline: $px pixels differ"
+          magick compare "$BASELINE/$name.png" "$OUT/$name.png" "$OUT/$name.diff.png" 2>/dev/null || true
+          drift=$((drift+1))
+        fi
+      fi
+      ;;
+    *) die "unknown scene command: $cmd" ;;
+  esac
+done < "$SCENE"
+
+if [[ $HAVE_MAGICK -eq 1 ]]; then
+  # shellcheck disable=SC2046
+  magick $(ls "$OUT"/*.png | grep -v '\.diff\.png$' | sort) +append \
+    -bordercolor gray -border 2 "$OUT/contact-sheet.png" 2>/dev/null || true
+fi
+
+[[ $KEEP -eq 1 ]] || pebble kill --force >/dev/null 2>&1 || true
+
+echo "wrote $step shots to $OUT"
+if [[ -n "$BASELINE" ]]; then
+  if [[ $drift -eq 0 ]]; then
+    echo "no visual drift against $BASELINE"
+  else
+    echo "$drift shot(s) differ from $BASELINE -- see the .diff.png files"
+    exit 1
+  fi
+fi

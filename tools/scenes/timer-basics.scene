@@ -1,0 +1,13 @@
+# The app as it ships: make a timer, look at it, come back to the list.
+# Small enough to be the smoke test, and it is the scene to run on aplite when
+# checking whether a change still fits in that platform's 24 KB.
+
+note an empty app opens straight into the duration picker
+shot picker
+press select        # move off the hours field
+press up 3          # three minutes
+press select        # move to the seconds field
+press select        # confirm -- the timer lands and its detail view opens
+shot detail
+press back
+shot menu
