@@ -24,8 +24,11 @@ with `settings_window`. Do not reintroduce the collision.
 
 - **Duration** -- the length dialled in on the duration picker.
 - **Setting** -- one of the app's preferences (`Sort Order`, `Start Timers`,
-  `Delete`). Named by `SettingId` in `settings.h`.
+  `Delete`, and -- on the colour platforms only -- `Color`). Named by
+  `SettingId` in `settings.h`.
 - **Option** -- one choice within one setting (`Last Used` / `Duration`).
+  Every setting has two options except `Color`, whose options are the eight
+  palette swatches in `s_color_values` in `main.c`.
 - **Armed delete** -- the in-place confirm state on the detail window's action
   bar, not a separate confirmation screen.
 

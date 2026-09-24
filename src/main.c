@@ -29,6 +29,7 @@
 #define TIMER_SORT_BY_DURATION_PERSIST_KEY 9938472
 #define TIMER_START_MANUALLY_PERSIST_KEY 51827394
 #define TIMER_DELETE_IMMEDIATELY_PERSIST_KEY 68013925
+#define TIMER_HIGHLIGHT_COLOR_PERSIST_KEY 19283746
 #define PERSIST_VERSION 1
 #define PERSIST_VERSION_KEY 46134672
 #define COUNTDOWN_TIMERS_MAX 8
@@ -73,12 +74,18 @@ static bool s_timer_sort_by_duration = false;
 // to keep in sync -- and an upgrading user lands there automatically.
 static bool s_start_timers_manually = false;
 static bool s_delete_immediately = false;
+#ifdef PBL_COLOR
+// the app's accent colour. not a bool, so the false-is-default rule above
+// cannot name it; the job is done here instead -- this initialiser is the
+// shipped default, and an absent persist key leaves it alone
+static GColor s_highlight_color = GColorPictonBlue;
+#endif
 static int32_t s_countdown_timer_id_max = 0;
 static AppTimer *s_app_timer = NULL;
 static int64_t s_last_activity = 0;
 
 /*
- * the copy, one home for all nine settings strings
+ * the copy, one home for all the settings strings
  *
  * option index 0 is always the shipped default, which is what a zero value
  * means. this is an enum and a string table, not the data-driven descriptor
@@ -88,12 +95,33 @@ static int64_t s_last_activity = 0;
  */
 static const char *const s_setting_names[SettingCount] = {
   "Sort Order", "Start Timers", "Delete",
+#ifdef PBL_COLOR
+  "Color",
+#endif
 };
 static const char *const s_setting_options[SettingCount][2] = {
   { "Last Used",     "Duration"    },
   { "Automatically", "Manually"    },
   { "Confirm First", "Immediately" },
+#ifdef PBL_COLOR
+  { NULL, NULL },  // Color's options are the palette below, not this table
+#endif
 };
+#ifdef PBL_COLOR
+// the Color setting's options: eight of the sixty-four colours a colour
+// platform can actually render, covering the wheel so a choice reads as a
+// new direction, not a shade of the last one. the names are the SDK's.
+// index 0 is the shipped default, per the rule above.
+#define COLOR_OPTIONS 8
+static const char *const s_color_names[COLOR_OPTIONS] = {
+  "Picton Blue",    "Blue Moon",     "Vivid Violet",   "Brilliant Rose",
+  "Folly",          "Sunset Orange", "Chrome Yellow",  "Malachite",
+};
+static const GColor s_color_values[COLOR_OPTIONS] = {
+  GColorPictonBlue, GColorBlueMoon,  GColorVividViolet, GColorBrilliantRose,
+  GColorFolly,      GColorSunsetOrange, GColorChromeYellow, GColorMalachite,
+};
+#endif
 
 static uint16_t prv_get_next_refresh_delay(void) {
   if (popup_window_get_topmost_window(s_popup_window)) {
@@ -318,6 +346,23 @@ static void prv_set_timer_running(CountdownTimer *countdown_timer, bool running)
  * the only place the SettingId enum meets the bools behind it
  */
 
+#ifdef PBL_COLOR
+/*
+ * push the accent colour into every window that owns a highlight. the setters
+ * stay per-window -- that is how the windows were built -- and this is the
+ * one place that knows all six. PBL_COLOR platforms are exactly the ones
+ * that own the settings and option windows.
+ */
+static void prv_apply_highlight_color(void) {
+  menu_window_set_highlight_color(s_menu_window, s_highlight_color);
+  detail_window_set_highlight_color(s_detail_window, s_highlight_color);
+  duration_window_set_highlight_color(s_duration_window, s_highlight_color);
+  popup_window_set_highlight_color(s_popup_window, s_highlight_color);
+  settings_window_set_highlight_color(s_settings_window, s_highlight_color);
+  option_window_set_highlight_color(s_option_window, s_highlight_color);
+}
+#endif
+
 static uint8_t prv_get_setting(SettingId setting) {
   switch (setting) {
     case SettingSortOrder:
@@ -326,6 +371,15 @@ static uint8_t prv_get_setting(SettingId setting) {
       return s_start_timers_manually ? 1 : 0;
     case SettingDelete:
       return s_delete_immediately ? 1 : 0;
+#ifdef PBL_COLOR
+    case SettingColor:
+      for (uint8_t i = 0; i < COLOR_OPTIONS; i++) {
+        if (gcolor_equal(s_color_values[i], s_highlight_color)) {
+          return i;
+        }
+      }
+      return 0;  // a colour outside the palette reads as the default
+#endif
     default:
       return 0;
   }
@@ -345,6 +399,12 @@ static void prv_set_setting(SettingId setting, uint8_t option) {
       // the detail window owns the arming, so hand it the new value now
       detail_window_set_delete_immediately(s_detail_window, s_delete_immediately);
       break;
+#ifdef PBL_COLOR
+    case SettingColor:
+      s_highlight_color = s_color_values[option];
+      prv_apply_highlight_color();
+      break;
+#endif
     default:
       break;
   }
@@ -378,7 +438,7 @@ static void app_timer_callback(void *data) {
     // show timer confirmation window
     popup_window_set_countdown_timer(s_popup_window, countdown_timer);
     popup_window_set_title(s_popup_window, "Time's Up!");
-    popup_window_set_highlight_color(s_popup_window, PBL_IF_COLOR_ELSE(GColorPictonBlue, GColorWhite));
+    popup_window_set_highlight_color(s_popup_window, PBL_IF_COLOR_ELSE(s_highlight_color, GColorWhite));
 #ifdef PBL_PLATFORM_APLITE
     popup_window_set_image(s_popup_window, RESOURCE_ID_IMAGE_ALARM);
 #else
@@ -580,7 +640,7 @@ static void detail_window_delete_timer_callback(CountdownTimer *countdown_timer,
 
   // show timer confirmation window
   popup_window_set_title(s_popup_window, "Timer Deleted");
-  popup_window_set_highlight_color(s_popup_window, PBL_IF_COLOR_ELSE(GColorPictonBlue, GColorWhite));
+  popup_window_set_highlight_color(s_popup_window, PBL_IF_COLOR_ELSE(s_highlight_color, GColorWhite));
 #ifdef PBL_PLATFORM_APLITE
   popup_window_set_image(s_popup_window, RESOURCE_ID_IMAGE_SHREADER);
   popup_window_set_auto_close_duration(s_popup_window, 1000);
@@ -652,6 +712,11 @@ static const char *settings_name_callback(uint8_t setting, void *context) {
 
 static const char *settings_value_callback(uint8_t setting, void *context) {
   if (setting < SettingCount) {
+#ifdef PBL_COLOR
+    if ((SettingId)setting == SettingColor) {
+      return s_color_names[prv_get_setting(SettingColor)];
+    }
+#endif
     return s_setting_options[setting][prv_get_setting((SettingId)setting)];
   }
   // error handling
@@ -670,8 +735,15 @@ static const char *settings_value_callback(uint8_t setting, void *context) {
 
 static void settings_window_clicked_callback(uint8_t setting, void *context) {
   s_option_window_setting = (SettingId)setting;
+#ifdef PBL_COLOR
+  if ((SettingId)setting == SettingColor) {
+    option_window_push(s_option_window, s_setting_names[setting], s_color_names,
+      COLOR_OPTIONS, prv_get_setting(SettingColor), s_color_values, true);
+    return;
+  }
+#endif
   option_window_push(s_option_window, s_setting_names[setting], s_setting_options[setting],
-    2, prv_get_setting((SettingId)setting), true);
+    2, prv_get_setting((SettingId)setting), NULL, true);
 }
 
 
@@ -791,6 +863,13 @@ static void initialize(void) {
   if (persist_exists(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY)) {
     s_delete_immediately = (persist_read_int(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY) != 0);
   }
+#ifdef PBL_COLOR
+  if (persist_exists(TIMER_HIGHLIGHT_COLOR_PERSIST_KEY)) {
+    s_highlight_color = (GColor) {
+      .argb = (uint8_t)persist_read_int(TIMER_HIGHLIGHT_COLOR_PERSIST_KEY)
+    };
+  }
+#endif
   // cancel wakeup
   wakeup_cancel_all();
 
@@ -806,7 +885,7 @@ static void initialize(void) {
     .clicked = menu_window_click_callback,
   };
   s_menu_window = menu_window_create(menu_callbacks, true);
-  menu_window_set_highlight_color(s_menu_window, PBL_IF_COLOR_ELSE(GColorPictonBlue, GColorBlack));
+  menu_window_set_highlight_color(s_menu_window, PBL_IF_COLOR_ELSE(s_highlight_color, GColorBlack));
   menu_window_refresh(s_menu_window);
 
   // create detail window
@@ -816,14 +895,14 @@ static void initialize(void) {
     .delete_timer = detail_window_delete_timer_callback,
   };
   s_detail_window = detail_window_create(detail_callbacks);
-  detail_window_set_highlight_color(s_detail_window,PBL_IF_COLOR_ELSE(GColorPictonBlue, GColorWhite));
+  detail_window_set_highlight_color(s_detail_window,PBL_IF_COLOR_ELSE(s_highlight_color, GColorWhite));
 
   // create duration window
   DurationWindowCallbacks duration_callbacks = {
     .duration_complete = duration_window_complete_callback,
   };
   s_duration_window = duration_window_create(duration_callbacks);
-  duration_window_set_highlight_color(s_duration_window, PBL_IF_COLOR_ELSE(GColorPictonBlue, GColorBlack));
+  duration_window_set_highlight_color(s_duration_window, PBL_IF_COLOR_ELSE(s_highlight_color, GColorBlack));
 
   // create pop-up window
   PopupWindowCallbacks popup_callbacks = {
@@ -844,10 +923,10 @@ static void initialize(void) {
   };
   s_settings_window = settings_window_create(settings_callbacks);
   settings_window_set_highlight_color(s_settings_window,
-    PBL_IF_COLOR_ELSE(GColorPictonBlue, GColorBlack));
+    PBL_IF_COLOR_ELSE(s_highlight_color, GColorBlack));
   s_option_window = option_window_create(option_window_selected_callback, NULL);
   option_window_set_highlight_color(s_option_window,
-    PBL_IF_COLOR_ELSE(GColorPictonBlue, GColorBlack));
+    PBL_IF_COLOR_ELSE(s_highlight_color, GColorBlack));
 #endif
 
   // check wakeup in case launched by pin
@@ -938,6 +1017,9 @@ static void deinitialize(void) {
   persist_write_int(TIMER_SORT_BY_DURATION_PERSIST_KEY, s_timer_sort_by_duration ? 1 : 0);
   persist_write_int(TIMER_START_MANUALLY_PERSIST_KEY, s_start_timers_manually ? 1 : 0);
   persist_write_int(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY, s_delete_immediately ? 1 : 0);
+#ifdef PBL_COLOR
+  persist_write_int(TIMER_HIGHLIGHT_COLOR_PERSIST_KEY, s_highlight_color.argb);
+#endif
   countdown_timer_list_save(s_countdown_timers, s_countdown_timers_count,
     COUNTDOWN_TIMER_PERSIST_KEY);
   // schedule the wakeup

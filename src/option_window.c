@@ -12,7 +12,8 @@
  *      void          option_window_destroy(OptionWindow *option_window);
  *      void          option_window_push(OptionWindow *option_window,
  *                          const char *title, const char *const *labels,
- *                          uint8_t count, uint8_t selected, bool animated);
+ *                          uint8_t count, uint8_t selected,
+ *                          const GColor *swatches, bool animated);
  *      void          option_window_set_highlight_color(OptionWindow
  *                          *option_window, GColor color);
  *
@@ -72,6 +73,7 @@ struct OptionWindow {
   void        *context;   //< callback context
   const char  *title;     //< window title, drawn as a section header on rect
   const char *const *labels; //< the option labels, owned by the caller
+  const GColor  *swatches;   //< one colour per label, or NULL; owned by the caller
   uint8_t     count;      //< number of labels
   uint8_t     selected_option; //< which option currently carries the filled dot
   GColor      highlight_color; //< main color for highlights
@@ -152,6 +154,11 @@ static GFont option_title_font(void) {
  * two concentric strokes make the firmware's 2px ring; the filled dot marks
  * the selected option. colours follow the highlight, never a literal
  * GColorBlack, which would disappear on a highlighted row.
+ *
+ * with swatches, every row carries its own colour as a chip inside the ring,
+ * which is the only way the user can see each option before committing. the
+ * ring keeps marking the current option -- a lone thin outline around the
+ * other chips, the firmware's double ring around this one.
  */
 
 static void option_draw_radio(GContext *ctx, const Layer *cell_layer,
@@ -172,11 +179,21 @@ static void option_draw_radio(GContext *ctx, const Layer *cell_layer,
                        gcolor_legible_over(option_window->highlight_color) : GColorBlack;
   graphics_context_set_stroke_color(ctx, color);
   graphics_context_set_fill_color(ctx, color);
-  graphics_draw_circle(ctx, center, OPTION_RADIO_RADIUS);
-  graphics_draw_circle(ctx, center, OPTION_RADIO_RADIUS - 1);
-  if (row == option_window->selected_option) {
-    graphics_fill_circle(ctx, center, OPTION_RADIO_DOT_RADIUS);
+  if (option_window->swatches == NULL) {
+    graphics_draw_circle(ctx, center, OPTION_RADIO_RADIUS);
+    graphics_draw_circle(ctx, center, OPTION_RADIO_RADIUS - 1);
+    if (row == option_window->selected_option) {
+      graphics_fill_circle(ctx, center, OPTION_RADIO_DOT_RADIUS);
+    }
+    return;
   }
+  if (row == option_window->selected_option) {
+    graphics_draw_circle(ctx, center, OPTION_RADIO_RADIUS);
+    graphics_draw_circle(ctx, center, OPTION_RADIO_RADIUS - 1);
+  }
+  graphics_draw_circle(ctx, center, OPTION_RADIO_DOT_RADIUS + 1);
+  graphics_context_set_fill_color(ctx, option_window->swatches[row]);
+  graphics_fill_circle(ctx, center, OPTION_RADIO_DOT_RADIUS);
 }
 
 
@@ -323,6 +340,7 @@ OptionWindow *option_window_create(OptionWindowSelectCallback selected, void *co
   option_window->status = NULL;
   option_window->title = NULL;
   option_window->labels = NULL;
+  option_window->swatches = NULL;
   option_window->count = 0;
   option_window->selected_option = 0;
   option_window->highlight_color = GColorBlack;
@@ -359,9 +377,10 @@ void option_window_destroy(OptionWindow *option_window) {
 
 void option_window_push(OptionWindow *option_window, const char *title,
                         const char *const *labels, uint8_t count, uint8_t selected,
-                        bool animated) {
+                        const GColor *swatches, bool animated) {
   option_window->title = title;
   option_window->labels = labels;
+  option_window->swatches = swatches;
   option_window->count = count;
   option_window->selected_option = selected;
   window_stack_push(option_window->window, animated);

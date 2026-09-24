@@ -12,7 +12,8 @@
  *      void          option_window_destroy(OptionWindow *option_window);
  *      void          option_window_push(OptionWindow *option_window,
  *                          const char *title, const char *const *labels,
- *                          uint8_t count, uint8_t selected, bool animated);
+ *                          uint8_t count, uint8_t selected,
+ *                          const GColor *swatches, bool animated);
  *      void          option_window_set_highlight_color(OptionWindow
  *                          *option_window, GColor color);
  *
@@ -100,12 +101,15 @@ void option_window_destroy(OptionWindow *option_window);
  *  labels: the option labels, one per row
  *  count: the number of labels
  *  selected: the option the list opens on, which carries the filled circle
+ *  swatches: one colour per row, or NULL. when given, every row's circle
+ *      carries that colour as a chip so the user can see each option before
+ *      picking it -- this is what turns the radio list into a colour picker
  *  animated: whether to animate the push or not
  */
 
 void option_window_push(OptionWindow *option_window, const char *title,
                         const char *const *labels, uint8_t count, uint8_t selected,
-                        bool animated);
+                        const GColor *swatches, bool animated);
 
 
 

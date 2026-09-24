@@ -20,11 +20,19 @@
  * ----------------------
  * one of the app's settings. option index 0 is always the shipped default,
  * which is also what a zero-initialised static gives an upgrading user.
+ *
+ * SettingColor is a PBL_COLOR member, not a platform one: aplite and diorite
+ * are both black and white, so a colour they cannot render must not exist in
+ * their copy of this enum. Every renderer sizes itself off SettingCount,
+ * which drops the row on both automatically.
  */
 
 typedef enum {
   SettingSortOrder = 0,
   SettingStartTimers,
   SettingDelete,
+#ifdef PBL_COLOR
+  SettingColor,
+#endif
   SettingCount,
 } SettingId;
