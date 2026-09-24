@@ -1,0 +1,28 @@
+# The Color picker, on the four platforms that have it. The tour ends at the
+# Options screen; this scene walks the one setting the black-and-white
+# platforms do not offer: aplite has no settings windows at all, and diorite
+# has them but no colour, so Color is in neither's enum. It opens the picker at
+# its shipped default, picks a swatch, and shows the whole app recoloured.
+#
+# Shot names are prefixed with the scene's own step counter, which restarts at
+# 01, so they are given distinct names (color-*) and copied from the scene's
+# tmp output into the platform folder beside the tour's files without
+# collision -- screenshots.sh wipes its output dir, so the scene never runs
+# with -o pointed at the assets. Run after readme-tour.scene.
+
+note a colour platform opens straight to the duration picker; make a timer
+press select        # off hours
+press up 25         # twenty-five minutes
+press select        # off minutes
+press select        # confirm -- detail opens
+press back          # menu, cursor on the timer row
+press down          # to the cog row
+press select        # Settings
+press down 3        # to the Color row, which is last
+press select        # the colour picker, opening on Picton Blue
+shot color-picker
+press down 3        # to Brilliant Rose
+press select        # applies and pops back to settings
+shot color-chosen
+press back          # the recoloured list
+shot color-list
