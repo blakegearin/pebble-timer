@@ -1,15 +1,19 @@
-# Screenshot chores. The work itself lives in tools/screenshots.sh; this is
-# the loop a human would mistype: which scene belongs to which platform,
-# where the README shots live, and that the tour starts from a wiped state.
+# Repo chores: the pebble tool's common flows, and the screenshot harness
+# (whose work lives in tools/screenshots.sh -- this is the loop a human would
+# mistype: which scene belongs to which platform, where the README shots
+# live, and that the tour starts from a wiped state).
 #
 ## Targets
-##   make shots             refresh assets/screenshots/ for every platform
-##   make shot-<platform>   ...for one platform (e.g. make shot-chalk)
-##   make check             diff the empty menu against the upstream baselines
+##   make build               compile all six platforms into build/
+##   make run [PLAT=basalt]   build and install onto an emulator (also boots it)
+##   make kill                stop every running emulator
+##   make clean               remove build/ (screenshots live in tmp/, ignored)
+##   make shots               refresh assets/screenshots/ for every platform
+##   make shot-<platform>     ...for one platform (e.g. make shot-chalk)
+##   make check               diff the empty menu against the upstream baselines
 ##
 ## aplite has no cog row -- its settings are inline rows -- so its tour is a
 ## separate scene with three shots rather than four.
-
 PLATFORMS := aplite basalt chalk diorite emery gabbro
 BASELINED := aplite basalt chalk
 ASSETS    := assets/screenshots
@@ -19,12 +23,31 @@ TOUR_BW   := tools/scenes/readme-aplite.scene
 EMPTY     := tools/scenes/menu-empty.scene
 SHOTS     := tools/screenshots.sh
 
+PLAT ?= basalt
+
 .NOTPARALLEL:
 
-.PHONY: help shots check $(PLATFORMS:%=shot-%)
+.PHONY: help build run kill clean shots check $(PLATFORMS:%=shot-%)
 
 help:
-	@sed -n '/^## /s/^## //p' Makefile
+	@sed -n '/^##/s/^## \{0,1\}//p' Makefile
+
+build:
+	pebble build
+
+# Guard the target: `make run PLAT=blsa` would otherwise hand the typo to the
+# pebble tool and fail at install time with a stranger error.
+run:
+	@if [ -z "$(filter $(PLATFORMS),$(PLAT))" ]; then \
+		echo "unknown platform '$(PLAT)' -- try: $(PLATFORMS)"; exit 1; \
+	fi
+	pebble build && pebble install --emulator $(PLAT)
+
+kill:
+	pebble kill --force || true
+
+clean:
+	rm -rf build
 
 shots: $(PLATFORMS:%=shot-%)
 
