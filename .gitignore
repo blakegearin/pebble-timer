@@ -6,3 +6,8 @@ CMakeLists.txt
 
 node_modules/
 .python-version
+
+compile_commands.json
+.vscode/
+.cache/
+tmp/shots/
