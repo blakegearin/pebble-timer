@@ -106,6 +106,10 @@ CountdownTimer *countdown_timer_create(int64_t duration, int32_t *current_id_max
     (*countdown_timer) = (CountdownTimer) {
       .duration_ms = duration,
       .paused = true,
+      // a just-created timer is unambiguously the most recently updated one.
+      // leaving this zero made prv_update_app_glance compute an expiration of
+      // 1970 + 1h, so its "nothing is running" branch never added a slice.
+      .last_update = time(NULL),
     };
     countdown_timer_rand_id(countdown_timer, current_id_max);
     return countdown_timer;

@@ -209,6 +209,42 @@ static void prv_promote_timer(CountdownTimer *countdown_timer) {
 
 
 
+/*
+ * move a timer between running and paused, and keep its Timeline pin in step
+ *
+ * the one rule this enforces: a pin exists for a timer if and only if that
+ * timer is running and its duration is at least TIMELINE_MIN_LENGTH. Every
+ * running/paused transition in the app goes through here, because the five
+ * hand-copied versions this replaces had already drifted apart.
+ *
+ * two orderings are load-bearing:
+ *   - delete the pin *before* stopping. countdown_timer_stop rolls the timer's
+ *     id, and the pin is identified by that id, so deleting afterwards would
+ *     delete nothing.
+ *   - start *before* sending the pin, so a pin is only ever sent for a timer
+ *     that is definitively running.
+ */
+
+static void prv_set_timer_running(CountdownTimer *countdown_timer, bool running) {
+  if (running) {
+    if (countdown_timer_get_current_time(countdown_timer) <= 0) {
+      countdown_timer_update(countdown_timer,
+        countdown_timer_get_duration(countdown_timer), false);
+    }
+    countdown_timer_start(countdown_timer);
+    if (countdown_timer_get_duration(countdown_timer) >= TIMELINE_MIN_LENGTH) {
+      phone_send_pin(countdown_timer);
+    }
+  } else {
+    if (countdown_timer_get_duration(countdown_timer) >= TIMELINE_MIN_LENGTH) {
+      phone_delete_pin(countdown_timer);
+    }
+    countdown_timer_stop(countdown_timer, &s_countdown_timer_id_max);
+  }
+}
+
+
+
 /*******************************************************************************
  * CALLBACKS
  */
@@ -337,7 +373,7 @@ static void duration_window_complete_callback(int64_t duration, void *context) {
     countdown_timer = countdown_timer_create(duration, &s_countdown_timer_id_max);
     countdown_timer_list_add(s_countdown_timers, COUNTDOWN_TIMERS_MAX,
       &s_countdown_timers_count, countdown_timer);
-    countdown_timer_start(countdown_timer);
+    prv_set_timer_running(countdown_timer, true);
     // update visuals
     menu_window_reload_data(s_menu_window);
     menu_window_refresh(s_menu_window);
@@ -345,22 +381,15 @@ static void duration_window_complete_callback(int64_t duration, void *context) {
     duration_window_pop(duration_window, false);
     detail_window_push(s_detail_window, true);
     detail_window_deep_refresh(s_detail_window);
-
-    // delete the Timeline pin
-    if (countdown_timer_get_duration(countdown_timer) >= TIMELINE_MIN_LENGTH) {
-      phone_send_pin(countdown_timer);
-    }
   } else {
+    // stop first, while the *old* duration is still in place: a timer edited
+    // from above TIMELINE_MIN_LENGTH down to below it still has a stale pin,
+    // and only the old duration passes the guard that deletes it
+    prv_set_timer_running(countdown_timer, false);
     countdown_timer_update(countdown_timer, duration, true);
-    countdown_timer_start(countdown_timer);
+    prv_set_timer_running(countdown_timer, true);
     detail_window_deep_refresh(s_detail_window);
     duration_window_pop(duration_window, true);
-    // deal with timeline
-    phone_delete_pin(countdown_timer);
-    if (countdown_timer_get_duration(countdown_timer) >= TIMELINE_MIN_LENGTH) {
-      countdown_timer_rand_id(countdown_timer, &s_countdown_timer_id_max);
-      phone_send_pin(countdown_timer);
-    }
   }
 
   // float the just-used timer to the top of the list
@@ -398,25 +427,7 @@ static void detail_window_edit_timer_callback(CountdownTimer *countdown_timer, v
  */
 
 static void detail_window_playpause_timer_callback(CountdownTimer *countdown_timer, void *context) {
-  if (countdown_timer_get_paused(countdown_timer)) {
-    if (countdown_timer_get_current_time(countdown_timer) <= 0) {
-      countdown_timer_update(countdown_timer, countdown_timer_get_duration(countdown_timer), false);
-    }
-    // push the Timeline pin
-    if (countdown_timer_get_duration(countdown_timer) >= TIMELINE_MIN_LENGTH) {
-      phone_send_pin(countdown_timer);
-    }
-    // start the timer
-    countdown_timer_start(countdown_timer);
-  } else {
-    // delete the Timeline pin
-    if (countdown_timer_get_duration(countdown_timer) >= TIMELINE_MIN_LENGTH) {
-      phone_delete_pin(countdown_timer);
-      countdown_timer_rand_id(countdown_timer, &s_countdown_timer_id_max);
-    }
-    // stop the timer
-    countdown_timer_stop(countdown_timer, &s_countdown_timer_id_max);
-  }
+  prv_set_timer_running(countdown_timer, countdown_timer_get_paused(countdown_timer));
   // float the just-used timer to the top of the list
   prv_promote_timer(countdown_timer);
   // refresh DetailWindow
