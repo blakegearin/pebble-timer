@@ -1,7 +1,6 @@
 # TimerBetterer
 
-A countdown timer for Pebble smartwatches, forked from Pebble's published
-`pebble-timer` app and maintained for the current community firmware.
+A countdown timer for Pebble smartwatches, forked from Pebble's `pebble-timer` app.
 
 Timers live in a list on the main screen. Add one with the `+` row, dial in a
 duration, and it runs; open it from the list (or from its Timeline pin) to
@@ -26,16 +25,10 @@ app glance.
 - **Timeline pins** for timers of 15 minutes or more, with the end time shown
   while dialling in a duration.
 
-## On real hardware
-
-The app builds for six platforms, which differ in screen, colour depth, and
-how much memory compiled code costs. Basalt is the reference; the others are
-shown below it.
-
-### Basalt — Pebble Time / Time Steel (144×168, colour)
+## Preview
 
 <details open>
-<summary>screens</summary>
+<summary>Pebble Time / Time Steel</summary>
 
 | Detail | List | Settings | Options |
 | --- | --- | --- | --- |
@@ -43,16 +36,8 @@ shown below it.
 
 </details>
 
-### Aplite — Pebble / Pebble Steel (144×168, 1-bit, 24 KB)
-
-The original hardware, where compiled code lives in the same 24 KB budget as
-data. The Settings sub-menu and the radio option window are too expensive
-there, so the three settings become permanent rows in the timer list instead
-and flip in place on a single SELECT press. The cog row never appears, and the
-cog bitmap is not even loaded.
-
 <details>
-<summary>screens</summary>
+<summary>Pebble / Pebble Steel</summary>
 
 | Detail | List with inline settings | A row flipped |
 | --- | --- | --- |
@@ -60,15 +45,8 @@ cog bitmap is not even loaded.
 
 </details>
 
-### Chalk — Pebble Time Round (180×180 round)
-
-Round screens show one focused setting at a time: the focused cell is 68 px
-tall and holds name over value, unfocused cells are 32 px and drop the value
-line — this is what the firmware's own settings do. There is no section
-header, because the circular mask would clip it.
-
 <details>
-<summary>screens</summary>
+<summary>Pebble Time Round</summary>
 
 | Detail | List | Settings | Options |
 | --- | --- | --- | --- |
@@ -76,13 +54,8 @@ header, because the circular mask would clip it.
 
 </details>
 
-### Diorite — Pebble 2 (144×168, 1-bit)
-
-Same layout as Basalt, black and white. Highlighted rows invert, and the
-icon-only settings row inverts with them.
-
 <details>
-<summary>screens</summary>
+<summary>Pebble 2</summary>
 
 | Detail | List | Settings | Options |
 | --- | --- | --- | --- |
@@ -90,14 +63,8 @@ icon-only settings row inverts with them.
 
 </details>
 
-### Emery — Pebble Time 2 (200×228, Large content size)
-
-Runs at a Large preferred content size: 61 px cells and scaled-up system
-fonts. No dimension is hardcoded — fonts resolve from the theme and the radio
-circles get a wider inset.
-
 <details>
-<summary>screens</summary>
+<summary>Pebble Time 2</summary>
 
 | Detail | List | Settings | Options |
 | --- | --- | --- | --- |
@@ -105,13 +72,8 @@ circles get a wider inset.
 
 </details>
 
-### Gabbro — Core 2 Duo (260×260 round, Large content size)
-
-Round geometry identical to Chalk (68/32 cells, 35 px radio inset) at Emery's
-Larger fonts.
-
 <details>
-<summary>screens</summary>
+<summary>Core 2 Duo</summary>
 
 | Detail | List | Settings | Options |
 | --- | --- | --- | --- |
