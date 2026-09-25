@@ -1,0 +1,26 @@
+# Reproduction for the accent bug. Make a timer, set a dark accent, then shoot
+# the menu with the timer row highlighted while running (play icon on the
+# dark highlight) and while paused (pause icon), plus the cog row highlighted.
+
+note make a 25:00 timer
+wait 4              # the app's first window needs to be up before presses land
+press select        # off hours
+press up 25         # twenty-five minutes
+press select        # off minutes
+press select        # confirm -- detail opens
+press back          # menu, cursor on the timer row
+press down          # to the cog row
+press select        # Settings
+press down 4        # to the Accent Color row
+press select        # the colour picker, opening on Malachite
+press down 3        # Dark Candy Apple Red
+press select        # applies and pops back to settings
+press back          # the recoloured menu, cursor on the cog row
+press up            # cursor on the timer row, running: play on dark highlight
+shot highlighted-play
+press select        # detail
+press select        # pause the timer
+press back          # menu: paused timer, cursor still on its row
+shot highlighted-pause
+press down          # to the cog row: cog on dark highlight
+shot highlighted-cog

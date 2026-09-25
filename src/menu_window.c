@@ -63,6 +63,9 @@ struct MenuWindow {
   MenuLayer   *menu;      //< menu layer displaying timer list
   GBitmap     *play_icon, *pause_icon;    //< menu layer icons
   GBitmap     *settings_icon;             //< cog row icon, never created on aplite
+  GColor      highlight_color;            //< accent of a highlighted row; the icons
+                                          //< must match it, and the menu layer keeps
+                                          //< no copy a draw callback can reach
   StatusBarLayer      *status;            //< status bar for Basalt
   MenuWindowCallbacks callbacks;          //< menu layer callbacks
 };
@@ -135,7 +138,7 @@ static int16_t menu_get_row_height_callback(MenuLayer *menu_layer, MenuIndex *ce
 // All items are centered as best as possible in all directions
 static void menu_cell_draw(GContext *ctx, const Layer *layer, char *title, GBitmap *icon,
                            int32_t progress, const GFont font, bool center_text,
-                           GColor col_fore, GColor col_back) {
+                           GColor col_fore, GColor col_back, GColor col_icon) {
   // calculate the relative sizes of the items
   GRect lay_bounds = layer_get_bounds(layer);
   GRect txt_bounds = GRectZero;
@@ -165,7 +168,15 @@ static void menu_cell_draw(GContext *ctx, const Layer *layer, char *title, GBitm
       center_text;
     img_bounds.origin.y = (lay_bounds.size.h - img_bounds.size.h - prg_bounds.size.h) / 2;
 #ifdef PBL_COLOR
-    graphics_context_set_compositing_mode(ctx, GCompOpAnd);
+    // the icons are 1-bit png-trans: the shape is black ink on a white field.
+    // AND paints that ink black and leaves the field transparent -- right for
+    // a white row, and for a highlighted row whose accent is light enough
+    // that its legible colour is black. SET inks the same shape white, which
+    // is what a dark accent needs -- the icon then matches the text colour
+    // menu_layer_set_highlight_colors gave the row, and the two flip over
+    // together at the same legibility threshold.
+    graphics_context_set_compositing_mode(ctx, gcolor_equal(col_icon, GColorWhite) ?
+      GCompOpSet : GCompOpAnd);
 #else
     if (menu_cell_layer_is_highlighted(layer)) {
       graphics_context_set_compositing_mode(ctx, GCompOpAssignInverted);
@@ -194,6 +205,17 @@ static void menu_cell_draw(GContext *ctx, const Layer *layer, char *title, GBitm
  * draw each row for menu layer
  */
 
+/*
+ * the colour a bitmap icon in a cell must be inked to stay legible: the
+ * accent's legible colour on a highlighted row (the same value MenuLayer hands
+ * the row's text), plain black on the white of a normal row. only consulted on
+ * the colour platforms; aplite inverts the icon through the compositing mode.
+ */
+static GColor menu_cell_icon_color(MenuWindow *menu_window, const Layer *cell_layer) {
+  return menu_cell_layer_is_highlighted(cell_layer) ?
+    gcolor_legible_over(menu_window->highlight_color) : GColorBlack;
+}
+
 static void menu_draw_row_callback(GContext* ctx, const Layer *cell_layer, MenuIndex *cell_index,
                                    void *context) {
   // get properties
@@ -205,7 +227,7 @@ static void menu_draw_row_callback(GContext* ctx, const Layer *cell_layer, MenuI
       // beside, at a stroke weight that matches it; gothic caps out at 28,
       // whose "+" is only a 12 px ink box.
       menu_cell_draw(ctx, cell_layer, "+", NULL, 0, fonts_get_system_font(FONT_KEY_BITHAM_42_LIGHT),
-        true, GColorBlack, GColorWhite);
+        true, GColorBlack, GColorWhite, GColorBlack);
       break;
     }
     case MenuRowTimer: {
@@ -233,14 +255,15 @@ static void menu_draw_row_callback(GContext* ctx, const Layer *cell_layer, MenuI
 #endif
       }
       menu_cell_draw(ctx, cell_layer, buff, icon, progress, font, MENU_CELL_CENTERED, progress_fg_color,
-        progress_bg_color);
+        progress_bg_color, menu_cell_icon_color(menu_window, cell_layer));
       break;
     }
     case MenuRowSettings: {
       // the row carries no label: the cog alone, centred the way the "+" row is.
       // it wants the "+" row's centring everywhere, not MENU_CELL_CENTERED.
       menu_cell_draw(ctx, cell_layer, NULL, menu_window->settings_icon, 0,
-        fonts_get_system_font(FONT_KEY_GOTHIC_28), true, GColorBlack, GColorWhite);
+        fonts_get_system_font(FONT_KEY_GOTHIC_28), true, GColorBlack, GColorWhite,
+        menu_cell_icon_color(menu_window, cell_layer));
       break;
     }
     case MenuRowSetting: {
@@ -275,6 +298,7 @@ static void menu_select_callback(MenuLayer *menu_layer, MenuIndex *cell_index, v
 static MenuWindow *menu_window_init(MenuWindow *menu_window,
                                     MenuWindowCallbacks menu_window_callbacks, bool animated) {
   // load resources
+  menu_window->highlight_color = GColorBlack;
   menu_window->settings_icon = NULL;
   menu_window->play_icon = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_PLAY_TRANS_WHITE);
   menu_window->pause_icon = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_PAUSE_TRANS_WHITE);
@@ -489,5 +513,6 @@ int16_t menu_window_row_to_setting_index(MenuWindow *menu_window, uint8_t row) {
  */
 
 void menu_window_set_highlight_color(MenuWindow *menu_window, GColor color) {
+  menu_window->highlight_color = color;
   menu_layer_set_highlight_colors(menu_window->menu, color, gcolor_legible_over(color));
 }
