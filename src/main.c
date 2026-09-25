@@ -23,18 +23,6 @@
 // constants
 #define COUNTDOWN_TIMER_PERSIST_KEY 72445846
 #define COUNTDOWN_TIMER_ID_PERSIST_KEY 3568356
-// this key's *value* is part of the on-flash contract: 1.2.6 users already have
-// their sort preference stored under 9938472, so renaming the #define is fine
-// but changing the integer would silently drop their choice on upgrade.
-// the stored int keeps meaning "1 = sort by duration" even though this fork
-// ships duration as the default; the inversion lives in initialize/deinitialize
-#define TIMER_SORT_BY_DURATION_PERSIST_KEY 9938472
-#define TIMER_GROUPING_DISABLED_PERSIST_KEY 73849201
-#define TIMER_START_MANUALLY_PERSIST_KEY 51827394
-#define TIMER_DELETE_IMMEDIATELY_PERSIST_KEY 68013925
-#define TIMER_HIGHLIGHT_COLOR_PERSIST_KEY 19283746
-#define TIMER_SNOOZE_PERSIST_KEY 37492058
-#define TIMER_WRAP_AROUND_PERSIST_KEY 64718293
 #define PERSIST_VERSION 1
 #define PERSIST_VERSION_KEY 46134672
 #define COUNTDOWN_TIMERS_MAX 8
@@ -76,127 +64,9 @@ static SettingId s_option_window_setting = SettingListSortOrder;
 static uint8_t s_countdown_timers_count = 0;
 static CountdownTimer *s_countdown_timers[COUNTDOWN_TIMERS_MAX] = {};
 static uint8_t s_timer_view_indices[COUNTDOWN_TIMERS_MAX] = {};
-static bool s_list_sort_by_last_used = false;
-static bool s_list_grouping_disabled = false;
-// whether a step past either end of the timer list lands on the other end
-static bool s_list_wrap_around_enabled = false;
-// naming rule: every setting's bool is named so that false is the shipped
-// default. statics zero-initialise and an absent persist key leaves them
-// untouched, so "no key yet" means "the shipped default" with no default table
-// to keep in sync -- and a fresh install lands there automatically. The rule
-// names the variables, not the on-flash ints: a stored value still means what
-// 1.2.6 stored, so the two settings this fork re-defaults are inverted at the
-// load/store boundary.
-static bool s_timer_start_automatically = false;
-static bool s_timer_delete_immediately = false;
-// the Snooze Length setting is not a bool, so the rule above cannot name its
-// default either; index 0 is the shipped one ("1 Minute") and an absent persist
-// key leaves this initialiser untouched, exactly like the accent colour's
-static uint8_t s_timer_snooze_option = 0;
-#ifdef PBL_COLOR
-// the app's accent colour. not a bool, so the false-is-default rule above
-// cannot name it; the job is done here instead -- this initialiser is the
-// shipped default, and an absent persist key leaves it alone
-static GColor s_highlight_color = GColorMalachite;
-#endif
 static int32_t s_countdown_timer_id_max = 0;
 static AppTimer *s_app_timer = NULL;
 static int64_t s_last_activity = 0;
-
-/*
- * the copy, one home for all the settings strings
- *
- * the shipped default is wherever the false static lands, per settings.h, and it
- * is the accessors -- not the table position -- that map a bool to its index.
- * On/Off pairs are listed `Off, On` so they read alike, which is why Confirm
- * Deletion's default (`On`) is the second entry. this is an enum and a string
- * table, not the data-driven descriptor table the spec rejected -- it generates no
- * UI. it exists because aplite renders the same settings as rows in the timer list
- * while the other platforms render them in the settings window: two renderers,
- * one copy.
- */
-static const char *const s_setting_names[SettingCount] = {
-  "Sort Order", "Group", "Wrap Around", "Start Mode", "Confirm Deletion",
-  "Snooze Length",
-#ifdef PBL_COLOR
-  "Accent Color",
-#endif
-};
-static const char *const s_setting_options[SettingCount][2] = {
-  { "Duration",      "Recency"       },
-  { "Running First", "Off"           },
-  { "Off",           "On"            },
-  { "Manually",      "Automatically" },
-  { "Off",           "On"            },  // On = confirm first, the shipped default
-  { NULL, NULL },  // Snooze Length's options are the delay list below, not this table
-#ifdef PBL_COLOR
-  { NULL, NULL },  // Accent Color's options are the palette below, not this table
-#endif
-};
-
-/*
- * the Snooze Length setting's options: how long the alarm waits before going off
- * again when the snooze button is pressed. index 0 is the shipped default
- * per the rule in settings.h, and Off sits last as its own sentinel: delay 0
- * means the popup shows no snooze icon at all.
- */
-#define SNOOZE_OPTIONS 7
-#define SNOOZE_OPTION_OFF (SNOOZE_OPTIONS - 1)
-static const char *const s_snooze_options[SNOOZE_OPTIONS] = {
-  "1 Minute", "5 Minutes", "10 Minutes", "15 Minutes", "30 Minutes", "1 Hour", "Off",
-};
-static const int64_t s_snooze_delays[SNOOZE_OPTIONS] = {
-  60000, 300000, 600000, 900000, 1800000, 3600000, 0,
-};
-
-#ifdef PBL_COLOR
-// the Accent Color setting's options: all sixty-four colours a colour platform can
-// render, in rainbow order -- red, orange, yellow, green, blue, indigo,
-// violet, dark to light within each band -- with the four true greys last.
-// The live preview on the picker (option_window.c) is what makes neighbours
-// like "Icterine" and "Pastel Yellow" tellable apart; the names are the
-// SDK's, spaced for reading.
-// index 0 is the shipped default, per the rule in settings.h, and Picton
-// Blue follows it: the two colours the app has ever shipped with, kept at
-// the top where the cursor lands, before the sweep.
-#define COLOR_OPTIONS 64
-static const char *const s_color_names[COLOR_OPTIONS] = {
-  "Malachite",                 "Picton Blue",               "Bulgarian Rose",            "Dark Candy Apple Red",
-  "Jazzberry Jam",             "Red",                       "Folly",                     "Rose Vale",
-  "Sunset Orange",             "Brilliant Rose",            "Melon",                     "Windsor Tan",
-  "Orange",                    "Chrome Yellow",             "Rajah",                     "Army Green",
-  "Kelly Green",               "Limerick",                  "Brass",                     "Spring Bud",
-  "Inchworm",                  "Yellow",                    "Icterine",                  "Pastel Yellow",
-  "Dark Green",                "Midnight Green",            "Islamic Green",             "Jaeger Green",
-  "Tiffany Blue",              "May Green",                 "Cadet Blue",                "Green",
-  "Medium Spring Green",       "Bright Green",              "Cyan",                      "Screamin Green",
-  "Medium Aquamarine",         "Electric Blue",             "Mint Green",                "Celeste",
-  "Oxford Blue",               "Duke Blue",                 "Blue",                      "Cobalt Blue",
-  "Blue Moon",                 "Liberty",                   "Very Light Blue",           "Vivid Cerulean",
-  "Baby Blue Eyes",            "Indigo",                    "Electric Ultramarine",      "Vivid Violet",
-  "Lavender Indigo",           "Imperial Purple",           "Purple",                    "Fashion Magenta",
-  "Magenta",                   "Purpureus",                 "Shocking Pink",             "Rich Brilliant Lavender",
-  "Black",                     "Dark Gray",                 "Light Gray",                "White",
-};
-static const GColor s_color_values[COLOR_OPTIONS] = {
-  GColorMalachite,             GColorPictonBlue,            GColorBulgarianRose,         GColorDarkCandyAppleRed,
-  GColorJazzberryJam,          GColorRed,                   GColorFolly,                 GColorRoseVale,
-  GColorSunsetOrange,          GColorBrilliantRose,         GColorMelon,                 GColorWindsorTan,
-  GColorOrange,                GColorChromeYellow,          GColorRajah,                 GColorArmyGreen,
-  GColorKellyGreen,            GColorLimerick,              GColorBrass,                 GColorSpringBud,
-  GColorInchworm,              GColorYellow,                GColorIcterine,              GColorPastelYellow,
-  GColorDarkGreen,             GColorMidnightGreen,         GColorIslamicGreen,          GColorJaegerGreen,
-  GColorTiffanyBlue,           GColorMayGreen,              GColorCadetBlue,             GColorGreen,
-  GColorMediumSpringGreen,     GColorBrightGreen,           GColorCyan,                  GColorScreaminGreen,
-  GColorMediumAquamarine,      GColorElectricBlue,          GColorMintGreen,             GColorCeleste,
-  GColorOxfordBlue,            GColorDukeBlue,              GColorBlue,                  GColorCobaltBlue,
-  GColorBlueMoon,              GColorLiberty,               GColorVeryLightBlue,         GColorVividCerulean,
-  GColorBabyBlueEyes,          GColorIndigo,                GColorElectricUltramarine,   GColorVividViolet,
-  GColorLavenderIndigo,        GColorImperialPurple,        GColorPurple,                GColorFashionMagenta,
-  GColorMagenta,               GColorPurpureus,             GColorShockingPink,          GColorRichBrilliantLavender,
-  GColorBlack,                 GColorDarkGray,              GColorLightGray,             GColorWhite,
-};
-#endif
 
 static uint16_t prv_get_next_refresh_delay(void) {
   if (popup_window_get_topmost_window(s_popup_window)) {
@@ -239,7 +109,7 @@ static uint16_t prv_get_next_refresh_delay(void) {
 static bool prv_timer_precedes(CountdownTimer *a, CountdownTimer *b) {
   bool a_running = !countdown_timer_get_paused(a);
   bool b_running = !countdown_timer_get_paused(b);
-  if (!s_list_grouping_disabled && a_running != b_running) {
+  if (!settings_list_grouping_disabled() && a_running != b_running) {
     return a_running;
   }
   return countdown_timer_get_last_update(a) > countdown_timer_get_last_update(b);
@@ -299,7 +169,7 @@ static void prv_sort_timers(CountdownTimer **timers, uint8_t count, TimerPrecede
  */
 
 static void prv_rebuild_timer_view_indices(void) {
-  if (s_list_sort_by_last_used) {
+  if (settings_list_sort_by_last_used()) {
     for (uint8_t i = 0; i < s_countdown_timers_count; i++) {
       s_timer_view_indices[i] = i;
     }
@@ -430,105 +300,50 @@ static void prv_set_timer_running(CountdownTimer *countdown_timer, bool running)
  * that own the settings and option windows.
  */
 static void prv_apply_highlight_color(void) {
-  menu_window_set_highlight_color(s_menu_window, s_highlight_color);
-  detail_window_set_highlight_color(s_detail_window, s_highlight_color);
-  duration_window_set_highlight_color(s_duration_window, s_highlight_color);
-  popup_window_set_highlight_color(s_popup_window, s_highlight_color);
-  settings_window_set_highlight_color(s_settings_window, s_highlight_color);
-  settings_window_set_highlight_color(s_list_window, s_highlight_color);
-  settings_window_set_highlight_color(s_timer_window, s_highlight_color);
-  option_window_set_highlight_color(s_option_window, s_highlight_color);
+  menu_window_set_highlight_color(s_menu_window, settings_colour());
+  detail_window_set_highlight_color(s_detail_window, settings_colour());
+  duration_window_set_highlight_color(s_duration_window, settings_colour());
+  popup_window_set_highlight_color(s_popup_window, settings_colour());
+  settings_window_set_highlight_color(s_settings_window, settings_colour());
+  settings_window_set_highlight_color(s_list_window, settings_colour());
+  settings_window_set_highlight_color(s_timer_window, settings_colour());
+  option_window_set_highlight_color(s_option_window, settings_colour());
 }
 #endif
 
-static uint8_t prv_get_setting(SettingId setting) {
-  switch (setting) {
-    case SettingListSortOrder:
-      return s_list_sort_by_last_used ? 1 : 0;
-    case SettingListGroup:
-      return s_list_grouping_disabled ? 1 : 0;
-    case SettingListWrapAround:
-      return s_list_wrap_around_enabled ? 1 : 0;
-    case SettingTimerStartMode:
-      return s_timer_start_automatically ? 1 : 0;
-    case SettingTimerDeleteConfirm:
-      // Off is listed first but On -- confirm first -- is the shipped default, so
-      // the index and the bool run opposite ways here. see the note on the table.
-      return s_timer_delete_immediately ? 0 : 1;
-    case SettingTimerSnoozeLength:
-      return s_timer_snooze_option;
-#ifdef PBL_COLOR
-    case SettingColor:
-      for (uint8_t i = 0; i < COLOR_OPTIONS; i++) {
-        if (gcolor_equal(s_color_values[i], s_highlight_color)) {
-          return i;
-        }
-      }
-      return 0;  // a colour outside the palette reads as the default
-#endif
-    default:
-      return 0;
-  }
-}
+/*
+ * apply a setting change
+ *
+ * settings.c has already stored the new value; what is left here is telling the
+ * windows that read it. This is the half that cannot live in settings.c: it
+ * reaches into the view mapping and the menu, detail and every tinted window.
+ */
 
 static void prv_set_setting(SettingId setting, uint8_t option) {
+  settings_set(setting, option);
   switch (setting) {
     case SettingListSortOrder:
-      s_list_sort_by_last_used = (option != 0);
       prv_rebuild_timer_view_indices();
       break;
     case SettingListGroup:
-      s_list_grouping_disabled = (option != 0);
       // the storage array itself is grouped, so re-establish both invariants
       prv_timers_changed();
       break;
     case SettingListWrapAround:
-      s_list_wrap_around_enabled = (option != 0);
       // the menu window owns the cursor, so hand it the new value now
-      menu_window_set_wrap_around(s_menu_window, s_list_wrap_around_enabled);
-      break;
-    case SettingTimerStartMode:
-      s_timer_start_automatically = (option != 0);
+      menu_window_set_wrap_around(s_menu_window, settings_list_wrap_around());
       break;
     case SettingTimerDeleteConfirm:
-      // option 0 is "Off" -- no confirmation -- which is the same thing as
-      // deleting immediately. inverse of the index, per the note in prv_get_setting
-      s_timer_delete_immediately = (option == 0);
       // the detail window owns the arming, so hand it the new value now
-      detail_window_set_delete_immediately(s_detail_window, s_timer_delete_immediately);
-      break;
-    case SettingTimerSnoozeLength:
-      s_timer_snooze_option = (option < SNOOZE_OPTIONS) ? option : 0;
+      detail_window_set_delete_immediately(s_detail_window, settings_timer_delete_immediately());
       break;
 #ifdef PBL_COLOR
     case SettingColor:
-      s_highlight_color = s_color_values[option];
       prv_apply_highlight_color();
       break;
 #endif
     default:
       break;
-  }
-}
-
-
-/*
- * how many options a setting offers
- *
- * every renderer that has to walk a setting's options -- the aplite row cycle
- * and the option window push -- asks here instead of assuming two
- */
-
-static uint8_t prv_get_option_count(SettingId setting) {
-  switch (setting) {
-    case SettingTimerSnoozeLength:
-      return SNOOZE_OPTIONS;
-#ifdef PBL_COLOR
-    case SettingColor:
-      return COLOR_OPTIONS;
-#endif
-    default:
-      return 2;
   }
 }
 
@@ -560,14 +375,14 @@ static void app_timer_callback(void *data) {
     // show timer confirmation window
     popup_window_set_countdown_timer(s_popup_window, countdown_timer);
     popup_window_set_title(s_popup_window, "Time's Up!");
-    popup_window_set_highlight_color(s_popup_window, PBL_IF_COLOR_ELSE(s_highlight_color, GColorWhite));
+    popup_window_set_highlight_color(s_popup_window, PBL_IF_COLOR_ELSE(settings_colour(), GColorWhite));
 #ifdef PBL_PLATFORM_APLITE
     popup_window_set_image(s_popup_window, RESOURCE_ID_IMAGE_ALARM);
 #else
     popup_window_set_pdc(s_popup_window, RESOURCE_ID_ICON_ALARM_CLOCK, true);
 #endif
     popup_window_set_auto_close_duration(s_popup_window, 15000);
-    popup_window_set_snooze_enabled(s_popup_window, s_timer_snooze_option != SNOOZE_OPTION_OFF);
+    popup_window_set_snooze_enabled(s_popup_window, settings_timer_snooze_enabled());
     // the alarm clock leaps upward while ringing, so the title stays below it
     popup_window_set_text_above(s_popup_window, false);
     popup_window_add_action_bar(s_popup_window);
@@ -614,7 +429,7 @@ static void app_timer_callback(void *data) {
  */
 
 static void popup_window_snooze_timer_callback(CountdownTimer *countdown_timer, void *context) {
-  int64_t snooze_delay = s_snooze_delays[s_timer_snooze_option];
+  int64_t snooze_delay = settings_timer_snooze_delay();
   if (snooze_delay <= 0) {
     return;
   }
@@ -625,7 +440,7 @@ static void popup_window_snooze_timer_callback(CountdownTimer *countdown_timer, 
   // show detail if not on top
   if (!detail_window_get_topmost_window(s_detail_window)) {
     detail_window_set_countdown_timer(s_detail_window, countdown_timer);
-    detail_window_set_delete_immediately(s_detail_window, s_timer_delete_immediately);
+    detail_window_set_delete_immediately(s_detail_window, settings_timer_delete_immediately());
     detail_window_push(s_detail_window, false);
   }
   detail_window_deep_refresh(s_detail_window);
@@ -687,12 +502,12 @@ static void duration_window_complete_callback(int64_t duration, void *context) {
     // timer paused. The chokepoint skips a stop that is not a real transition,
     // so this is a true no-op -- a fresh timer is already paused and owns no
     // pin.
-    prv_set_timer_running(countdown_timer, s_timer_start_automatically);
+    prv_set_timer_running(countdown_timer, settings_timer_start_automatically());
     // update visuals
     menu_window_reload_data(s_menu_window);
     menu_window_refresh(s_menu_window);
     detail_window_set_countdown_timer(s_detail_window, countdown_timer);
-    detail_window_set_delete_immediately(s_detail_window, s_timer_delete_immediately);
+    detail_window_set_delete_immediately(s_detail_window, settings_timer_delete_immediately());
     duration_window_pop(duration_window, false);
     detail_window_push(s_detail_window, true);
     detail_window_deep_refresh(s_detail_window);
@@ -704,7 +519,7 @@ static void duration_window_complete_callback(int64_t duration, void *context) {
     countdown_timer_update(countdown_timer, duration, true);
     // the same setting governs edit as create: the timer lands in the state
     // the setting names either way
-    prv_set_timer_running(countdown_timer, s_timer_start_automatically);
+    prv_set_timer_running(countdown_timer, settings_timer_start_automatically());
     detail_window_deep_refresh(s_detail_window);
     duration_window_pop(duration_window, true);
   }
@@ -782,7 +597,7 @@ static void detail_window_delete_timer_callback(CountdownTimer *countdown_timer,
 
   // show timer confirmation window
   popup_window_set_title(s_popup_window, "Timer Deleted");
-  popup_window_set_highlight_color(s_popup_window, PBL_IF_COLOR_ELSE(s_highlight_color, GColorWhite));
+  popup_window_set_highlight_color(s_popup_window, PBL_IF_COLOR_ELSE(settings_colour(), GColorWhite));
   // the shredder drops confetti past the bottom of its bounds, so the
   // title goes above the graphic here
   popup_window_set_text_above(s_popup_window, true);
@@ -841,35 +656,18 @@ static uint8_t menu_window_get_timer_count_callback(void *context) {
 /*
  * Settings copy callbacks
  *
- * one pair feeds both renderers of the settings: the inline rows in
- * menu_window (only ever drawn on aplite) and, on every other platform,
- * the settings window.
+ * thin adapters over settings.c, kept because the window callbacks are declared
+ * `(uint8_t, void *)` and settings.c speaks in SettingIds. The same pair feeds both
+ * renderers: the inline rows in menu_window (only ever drawn on aplite) and, on
+ * every other platform, the settings windows.
  */
 
 static const char *settings_name_callback(uint8_t setting, void *context) {
-  if (setting < SettingCount) {
-    return s_setting_names[setting];
-  }
-  // error handling
-  APP_LOG(APP_LOG_LEVEL_ERROR, "Attempted to access setting outside the enum");
-  return "";
+  return settings_name((SettingId)setting);
 }
 
 static const char *settings_value_callback(uint8_t setting, void *context) {
-  if (setting < SettingCount) {
-#ifdef PBL_COLOR
-    if ((SettingId)setting == SettingColor) {
-      return s_color_names[prv_get_setting(SettingColor)];
-    }
-#endif
-    if ((SettingId)setting == SettingTimerSnoozeLength) {
-      return s_snooze_options[prv_get_setting(SettingTimerSnoozeLength)];
-    }
-    return s_setting_options[setting][prv_get_setting((SettingId)setting)];
-  }
-  // error handling
-  APP_LOG(APP_LOG_LEVEL_ERROR, "Attempted to access setting outside the enum");
-  return "";
+  return settings_value((SettingId)setting);
 }
 
 
@@ -878,105 +676,53 @@ static const char *settings_value_callback(uint8_t setting, void *context) {
 
 /*
  * SettingsWindow clicked callback
- * re-point the one option window at the clicked setting and open it
+ *
+ * re-point the one option window at the clicked setting and open it. The labels,
+ * their count and the colour swatches all come from settings.c, so the two
+ * unusual settings -- Snooze Length's delay list and Accent Color's palette --
+ * push exactly like a plain On/Off pair.
  */
 
 static void settings_window_clicked_callback(uint8_t setting, void *context) {
   s_option_window_setting = (SettingId)setting;
-#ifdef PBL_COLOR
-  if ((SettingId)setting == SettingColor) {
-    option_window_push(s_option_window, s_setting_names[setting], s_color_names,
-      COLOR_OPTIONS, prv_get_setting(SettingColor), s_color_values, true);
-    return;
-  }
-#endif
-  if ((SettingId)setting == SettingTimerSnoozeLength) {
-    option_window_push(s_option_window, s_setting_names[setting], s_snooze_options,
-      SNOOZE_OPTIONS, prv_get_setting(SettingTimerSnoozeLength), NULL, true);
-    return;
-  }
-  option_window_push(s_option_window, s_setting_names[setting], s_setting_options[setting],
-    2, prv_get_setting((SettingId)setting), NULL, true);
+  option_window_push(s_option_window, settings_name((SettingId)setting),
+    settings_option_labels((SettingId)setting), settings_option_count((SettingId)setting),
+    settings_get((SettingId)setting), settings_option_swatches((SettingId)setting), true);
 }
 
 
 
 /*
- * The two groups
+ * The top settings list
  *
- * The settings come in two groups, named by their enum prefixes: the
- * `SettingList` three change how the timer list behaves, the `SettingTimer` three
- * how a timer itself behaves. On every platform but aplite each group is a
- * sub-menu of its own, so the settings list shows two rows -- `List` and `Timer`
- * -- with the one setting that belongs to neither, Accent Color, beside them.
- *
- * A group's array and its window's row list are the caller's, and SettingsWindow
- * only holds the pointer: the two group arrays together are the whole of
- * SettingCount but for SettingColor, which is the one thing to keep true when a
- * setting arrives. aplite has none of this: every setting is an inline row in its
- * timer list, grouped or not, and it cannot afford the windows this grouping
- * would need.
- */
-
-/*
- * the row ids of the two group rows. ids up to SettingCount are settings, so
- * these sit above the enum where no setting can collide with them, and they live
- * here rather than in settings_window.h because the window never reads them: it
- * hands a row's id straight back to the callbacks that list it
- */
-
-#define SETTINGS_ROW_GROUP_LIST  (SettingCount)
-#define SETTINGS_ROW_GROUP_TIMER (SettingCount + 1)
-
-static const char *const s_list_name = "List";
-static const char *const s_timer_name = "Timer";
-static const uint8_t s_list_setting_rows[] = {
-  SettingListSortOrder, SettingListGroup, SettingListWrapAround,
-};
-static const uint8_t s_timer_setting_rows[] = {
-  SettingTimerStartMode, SettingTimerDeleteConfirm, SettingTimerSnoozeLength,
-};
-static const uint8_t s_settings_rows[] = {
-  SETTINGS_ROW_GROUP_LIST,
-  SETTINGS_ROW_GROUP_TIMER,
-#ifdef PBL_COLOR
-  SettingColor,
-#endif
-};
-
-/*
- * the settings list's three callbacks, which differ from the plain ones only in
- * that two of their rows are ways into another list rather than settings with a
- * value of their own
+ * Its two rows above the settings are the group sub-menus; settings.c owns which
+ * rows each group holds and what the groups are called, and encodes a group row as
+ * an id at or above SettingCount (see SETTINGS_ROW_GROUP in settings.h). So these
+ * three callbacks only have to tell a group row from a setting row -- a group has
+ * a name and opens another SettingsWindow instead of an option list -- and lean on
+ * the plain callbacks for everything else.
  */
 
 static const char *settings_top_name_callback(uint8_t row_id, void *context) {
-  if (row_id == SETTINGS_ROW_GROUP_LIST) {
-    return s_list_name;
-  }
-  if (row_id == SETTINGS_ROW_GROUP_TIMER) {
-    return s_timer_name;
+  if (row_id >= SettingCount) {
+    return settings_group_name((SettingsGroup)(row_id - SettingCount));
   }
   return settings_name_callback(row_id, context);
 }
 
 static const char *settings_top_value_callback(uint8_t row_id, void *context) {
-  if (row_id == SETTINGS_ROW_GROUP_LIST || row_id == SETTINGS_ROW_GROUP_TIMER) {
+  if (row_id >= SettingCount) {
     // no value: the row says "List" or "Timer" and nothing else, because what the
-    // group is set to is a question with three answers, and it is the next
-    // screen's job
+    // group is set to is a question the next screen answers
     return NULL;
   }
   return settings_value_callback(row_id, context);
 }
 
 static void settings_top_clicked_callback(uint8_t row_id, void *context) {
-  if (row_id == SETTINGS_ROW_GROUP_LIST) {
-    settings_window_push(s_list_window, true);
-    return;
-  }
-  if (row_id == SETTINGS_ROW_GROUP_TIMER) {
-    settings_window_push(s_timer_window, true);
+  if (row_id >= SettingCount) {
+    settings_window_push((SettingsGroup)(row_id - SettingCount) == SettingsGroupList ?
+      s_list_window : s_timer_window, true);
     return;
   }
   settings_window_clicked_callback(row_id, context);
@@ -1032,7 +778,7 @@ static void menu_window_click_callback(MenuRowKind kind, uint8_t row, void *cont
         break;
       }
       detail_window_set_countdown_timer(s_detail_window, countdown_timer);
-      detail_window_set_delete_immediately(s_detail_window, s_timer_delete_immediately);
+      detail_window_set_delete_immediately(s_detail_window, settings_timer_delete_immediately());
       detail_window_push(s_detail_window, true);
       detail_window_deep_refresh(s_detail_window);
       if (s_app_timer != NULL) {
@@ -1054,8 +800,8 @@ static void menu_window_click_callback(MenuRowKind kind, uint8_t row, void *cont
       if (setting < 0) {
         break;
       }
-      const uint8_t next = (prv_get_setting((SettingId)setting) + 1) %
-        prv_get_option_count((SettingId)setting);
+      const uint8_t next = (settings_get((SettingId)setting) + 1) %
+        settings_option_count((SettingId)setting);
       prv_set_setting((SettingId)setting, next);
       if ((SettingId)setting == SettingListSortOrder || (SettingId)setting == SettingListGroup) {
         // the timer order just changed, so reload -- which drops the
@@ -1095,38 +841,9 @@ static void initialize(void) {
   if (persist_exists(COUNTDOWN_TIMER_ID_PERSIST_KEY)) {
     s_countdown_timer_id_max = persist_read_int(COUNTDOWN_TIMER_ID_PERSIST_KEY);
   }
-  if (persist_exists(TIMER_SORT_BY_DURATION_PERSIST_KEY)) {
-    // stored int keeps 1.2.6's meaning: 1 = sort by duration. this fork
-    // defaults to duration, so the variable is its inverse
-    s_list_sort_by_last_used = (persist_read_int(TIMER_SORT_BY_DURATION_PERSIST_KEY) == 0);
-  }
-  if (persist_exists(TIMER_GROUPING_DISABLED_PERSIST_KEY)) {
-    // a key this fork introduced, so it stores the bool's own meaning: no
-    // 1.2.6 contract to honour and no inversion at the load boundary
-    s_list_grouping_disabled = (persist_read_int(TIMER_GROUPING_DISABLED_PERSIST_KEY) != 0);
-  }
-  if (persist_exists(TIMER_WRAP_AROUND_PERSIST_KEY)) {
-    // the same: a key of this fork's, storing its bool's own meaning
-    s_list_wrap_around_enabled = (persist_read_int(TIMER_WRAP_AROUND_PERSIST_KEY) != 0);
-  }
-  if (persist_exists(TIMER_START_MANUALLY_PERSIST_KEY)) {
-    // same contract: 1 = start manually, and the fork's default inverts it
-    s_timer_start_automatically = (persist_read_int(TIMER_START_MANUALLY_PERSIST_KEY) == 0);
-  }
-  if (persist_exists(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY)) {
-    s_timer_delete_immediately = (persist_read_int(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY) != 0);
-  }
-  if (persist_exists(TIMER_SNOOZE_PERSIST_KEY)) {
-    int saved = persist_read_int(TIMER_SNOOZE_PERSIST_KEY);
-    s_timer_snooze_option = (saved >= 0 && saved < SNOOZE_OPTIONS) ? (uint8_t)saved : 0;
-  }
-#ifdef PBL_COLOR
-  if (persist_exists(TIMER_HIGHLIGHT_COLOR_PERSIST_KEY)) {
-    s_highlight_color = (GColor) {
-      .argb = (uint8_t)persist_read_int(TIMER_HIGHLIGHT_COLOR_PERSIST_KEY)
-    };
-  }
-#endif
+  // the settings. an absent key leaves each at its shipped default, so an
+  // upgrading user keeps their timers and inherits the defaults they never set
+  settings_load();
   // cancel wakeup
   wakeup_cancel_all();
 
@@ -1142,9 +859,9 @@ static void initialize(void) {
     .clicked = menu_window_click_callback,
   };
   s_menu_window = menu_window_create(menu_callbacks, true);
-  menu_window_set_highlight_color(s_menu_window, PBL_IF_COLOR_ELSE(s_highlight_color, GColorBlack));
+  menu_window_set_highlight_color(s_menu_window, PBL_IF_COLOR_ELSE(settings_colour(), GColorBlack));
   // the cursor needs the setting it was loaded with before the list is walked
-  menu_window_set_wrap_around(s_menu_window, s_list_wrap_around_enabled);
+  menu_window_set_wrap_around(s_menu_window, settings_list_wrap_around());
   menu_window_refresh(s_menu_window);
 
   // create detail window
@@ -1154,14 +871,14 @@ static void initialize(void) {
     .delete_timer = detail_window_delete_timer_callback,
   };
   s_detail_window = detail_window_create(detail_callbacks);
-  detail_window_set_highlight_color(s_detail_window,PBL_IF_COLOR_ELSE(s_highlight_color, GColorWhite));
+  detail_window_set_highlight_color(s_detail_window,PBL_IF_COLOR_ELSE(settings_colour(), GColorWhite));
 
   // create duration window
   DurationWindowCallbacks duration_callbacks = {
     .duration_complete = duration_window_complete_callback,
   };
   s_duration_window = duration_window_create(duration_callbacks);
-  duration_window_set_highlight_color(s_duration_window, PBL_IF_COLOR_ELSE(s_highlight_color, GColorBlack));
+  duration_window_set_highlight_color(s_duration_window, PBL_IF_COLOR_ELSE(settings_colour(), GColorBlack));
 
   // create pop-up window
   PopupWindowCallbacks popup_callbacks = {
@@ -1175,15 +892,17 @@ static void initialize(void) {
   // aplite has neither: its settings are inline rows in the timer list, and
   // the two windows' .text does not fit in its 24 KB alongside the data
 #ifndef PBL_PLATFORM_APLITE
+  uint8_t top_count, group_count;
+  const uint8_t *top_rows = settings_top_rows(&top_count);
+  const uint8_t *list_rows = settings_group_rows(SettingsGroupList, &group_count);
   SettingsWindowCallbacks settings_callbacks = {
     .get_name = settings_top_name_callback,
     .get_value = settings_top_value_callback,
     .clicked = settings_top_clicked_callback,
   };
-  s_settings_window = settings_window_create(settings_callbacks, "Settings", s_settings_rows,
-    sizeof(s_settings_rows) / sizeof(s_settings_rows[0]));
+  s_settings_window = settings_window_create(settings_callbacks, "Settings", top_rows, top_count);
   settings_window_set_highlight_color(s_settings_window,
-    PBL_IF_COLOR_ELSE(s_highlight_color, GColorBlack));
+    PBL_IF_COLOR_ELSE(settings_colour(), GColorBlack));
   // the two groups' own sub-menus, fed by the plain callbacks: every row in each
   // is a setting, so there is nothing extra to say about them
   SettingsWindowCallbacks group_callbacks = {
@@ -1191,17 +910,18 @@ static void initialize(void) {
     .get_value = settings_value_callback,
     .clicked = settings_window_clicked_callback,
   };
-  s_list_window = settings_window_create(group_callbacks, s_list_name, s_list_setting_rows,
-    sizeof(s_list_setting_rows) / sizeof(s_list_setting_rows[0]));
+  s_list_window = settings_window_create(group_callbacks, settings_group_name(SettingsGroupList),
+    list_rows, group_count);
+  const uint8_t *timer_rows = settings_group_rows(SettingsGroupTimer, &group_count);
+  s_timer_window = settings_window_create(group_callbacks, settings_group_name(SettingsGroupTimer),
+    timer_rows, group_count);
   settings_window_set_highlight_color(s_list_window,
-    PBL_IF_COLOR_ELSE(s_highlight_color, GColorBlack));
-  s_timer_window = settings_window_create(group_callbacks, s_timer_name, s_timer_setting_rows,
-    sizeof(s_timer_setting_rows) / sizeof(s_timer_setting_rows[0]));
+    PBL_IF_COLOR_ELSE(settings_colour(), GColorBlack));
   settings_window_set_highlight_color(s_timer_window,
-    PBL_IF_COLOR_ELSE(s_highlight_color, GColorBlack));
+    PBL_IF_COLOR_ELSE(settings_colour(), GColorBlack));
   s_option_window = option_window_create(option_window_selected_callback, NULL);
   option_window_set_highlight_color(s_option_window,
-    PBL_IF_COLOR_ELSE(s_highlight_color, GColorBlack));
+    PBL_IF_COLOR_ELSE(settings_colour(), GColorBlack));
 #endif
 
   // check wakeup in case launched by pin
@@ -1213,7 +933,7 @@ static void initialize(void) {
       if (countdown_timer != NULL) {
         // show timer in detail window
         detail_window_set_countdown_timer(s_detail_window, countdown_timer);
-        detail_window_set_delete_immediately(s_detail_window, s_timer_delete_immediately);
+        detail_window_set_delete_immediately(s_detail_window, settings_timer_delete_immediately());
         detail_window_push(s_detail_window, true);
         detail_window_deep_refresh(s_detail_window);
       }
@@ -1289,15 +1009,7 @@ static void deinitialize(void) {
   // persist state
   persist_write_int(PERSIST_VERSION_KEY, PERSIST_VERSION);
   persist_write_int(COUNTDOWN_TIMER_ID_PERSIST_KEY, s_countdown_timer_id_max);
-  persist_write_int(TIMER_SORT_BY_DURATION_PERSIST_KEY, s_list_sort_by_last_used ? 0 : 1);
-  persist_write_int(TIMER_GROUPING_DISABLED_PERSIST_KEY, s_list_grouping_disabled ? 1 : 0);
-  persist_write_int(TIMER_WRAP_AROUND_PERSIST_KEY, s_list_wrap_around_enabled ? 1 : 0);
-  persist_write_int(TIMER_START_MANUALLY_PERSIST_KEY, s_timer_start_automatically ? 0 : 1);
-  persist_write_int(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY, s_timer_delete_immediately ? 1 : 0);
-  persist_write_int(TIMER_SNOOZE_PERSIST_KEY, s_timer_snooze_option);
-#ifdef PBL_COLOR
-  persist_write_int(TIMER_HIGHLIGHT_COLOR_PERSIST_KEY, s_highlight_color.argb);
-#endif
+  settings_write();
   countdown_timer_list_save(s_countdown_timers, s_countdown_timers_count,
     COUNTDOWN_TIMER_PERSIST_KEY);
   // schedule the wakeup

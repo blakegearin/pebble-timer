@@ -1,0 +1,461 @@
+/*******************************************************************************
+ * FILENAME :        settings.c
+ *
+ * DESCRIPTION :
+ *      The app's settings: their values, their copy, the group tables the
+ *      settings list draws, and their persistence. Everything here is data and
+ *      its translation to and from option indices; the reactions a change causes
+ *      in the windows live in main.c, which reads the values back through the
+ *      behaviour getters below rather than touching these statics.
+ *
+ * PUBLIC FUNCTIONS :
+ *      uint8_t     settings_get(SettingId setting);
+ *      void        settings_set(SettingId setting, uint8_t option);
+ *      uint8_t     settings_option_count(SettingId setting);
+ *      const char *settings_name(SettingId setting);
+ *      const char *settings_value(SettingId setting);
+ *      const uint8_t *settings_group_rows(SettingsGroup group, uint8_t *count);
+ *      const uint8_t *settings_top_rows(uint8_t *count);
+ *      const char *settings_group_name(SettingsGroup group);
+ *      bool        settings_list_grouping_disabled(void);
+ *      bool        settings_list_sort_by_last_used(void);
+ *      bool        settings_list_wrap_around(void);
+ *      bool        settings_timer_start_automatically(void);
+ *      bool        settings_timer_delete_immediately(void);
+ *      bool        settings_timer_snooze_enabled(void);
+ *      int64_t     settings_timer_snooze_delay(void);
+ *      GColor      settings_colour(void);            // PBL_COLOR only
+ *      void        settings_load(void);
+ *      void        settings_write(void);
+ *
+ * AUTHOR :     Blake Gearin        START DATE :    2026-09-24
+ *
+ */
+
+#include <pebble.h>
+#include "settings.h"
+
+// The on-flash keys. COUNTDOWN_TIMER_PERSIST_KEY and its id sibling stay in
+// main.c -- those are the timer list, not a setting.
+//
+// this key's *value* is part of the on-flash contract: 1.2.6 users already have
+// their sort preference stored under 9938472, so renaming the #define is fine
+// but changing the integer would silently drop their choice on upgrade.
+// the stored int keeps meaning "1 = sort by duration" even though this fork
+// ships duration as the default; the inversion lives in settings_load/write
+#define TIMER_SORT_BY_DURATION_PERSIST_KEY 9938472
+#define TIMER_GROUPING_DISABLED_PERSIST_KEY 73849201
+#define TIMER_START_MANUALLY_PERSIST_KEY 51827394
+#define TIMER_DELETE_IMMEDIATELY_PERSIST_KEY 68013925
+#define TIMER_HIGHLIGHT_COLOR_PERSIST_KEY 19283746
+#define TIMER_SNOOZE_PERSIST_KEY 37492058
+#define TIMER_WRAP_AROUND_PERSIST_KEY 64718293
+
+/*******************************************************************************
+ * VALUES
+ */
+
+// naming rule: every setting's bool is named so that false is the shipped
+// default. statics zero-initialise and an absent persist key leaves them
+// untouched, so "no key yet" means "the shipped default" with no default table
+// to keep in sync -- and a fresh install lands there automatically. The rule
+// names the variables, not the on-flash ints: a stored value still means what
+// 1.2.6 stored, so the two settings this fork re-defaults are inverted at the
+// load/store boundary.
+static bool s_list_sort_by_last_used = false;
+static bool s_list_grouping_disabled = false;
+// whether a step past either end of the timer list lands on the other end
+static bool s_list_wrap_around_enabled = false;
+static bool s_timer_start_automatically = false;
+static bool s_timer_delete_immediately = false;
+// the Snooze Length setting is not a bool, so the rule above cannot name its
+// default either; index 0 is the shipped one ("1 Minute") and an absent persist
+// key leaves this initialiser untouched, exactly like the accent colour's
+static uint8_t s_timer_snooze_option = 0;
+#ifdef PBL_COLOR
+// the app's accent colour. not a bool, so the false-is-default rule above
+// cannot name it; the job is done here instead -- this initialiser is the
+// shipped default, and an absent persist key leaves it alone
+static GColor s_highlight_color = GColorMalachite;
+#endif
+
+/*******************************************************************************
+ * COPY
+ */
+
+/*
+ * one home for all the settings strings. the shipped default is wherever the
+ * false static lands, per settings.h, and it is the accessors -- not the table
+ * position -- that map a bool to its index. On/Off pairs are listed `Off, On` so
+ * they read alike, which is why Confirm Deletion's default (`On`) is the second
+ * entry. this is an enum and a string table, not the data-driven descriptor table
+ * the spec rejected -- it generates no UI. it exists because aplite renders the
+ * same settings as rows in the timer list while the other platforms render them in
+ * the settings window: two renderers, one copy.
+ */
+static const char *const s_setting_names[SettingCount] = {
+  "Sort Order", "Group", "Wrap Around", "Start Mode", "Confirm Deletion",
+  "Snooze Length",
+#ifdef PBL_COLOR
+  "Accent Color",
+#endif
+};
+static const char *const s_setting_options[SettingCount][2] = {
+  { "Duration",      "Recency"       },
+  { "Running First", "Off"           },
+  { "Off",           "On"            },
+  { "Manually",      "Automatically" },
+  { "Off",           "On"            },  // On = confirm first, the shipped default
+  { NULL, NULL },  // Snooze Length's options are the delay list below, not this table
+#ifdef PBL_COLOR
+  { NULL, NULL },  // Accent Color's options are the palette below, not this table
+#endif
+};
+
+/*
+ * the Snooze Length setting's options: how long the alarm waits before going off
+ * again when the snooze button is pressed. index 0 is the shipped default per the
+ * rule in settings.h, and Off sits last as its own sentinel: delay 0 means the
+ * popup shows no snooze icon at all.
+ */
+#define SNOOZE_OPTIONS 7
+#define SNOOZE_OPTION_OFF (SNOOZE_OPTIONS - 1)
+static const char *const s_snooze_options[SNOOZE_OPTIONS] = {
+  "1 Minute", "5 Minutes", "10 Minutes", "15 Minutes", "30 Minutes", "1 Hour", "Off",
+};
+static const int64_t s_snooze_delays[SNOOZE_OPTIONS] = {
+  60000, 300000, 600000, 900000, 1800000, 3600000, 0,
+};
+
+#ifdef PBL_COLOR
+// the Accent Color setting's options: all sixty-four colours a colour platform can
+// render, in rainbow order -- red, orange, yellow, green, blue, indigo,
+// violet, dark to light within each band -- with the four true greys last.
+// The live preview on the picker (option_window.c) is what makes neighbours
+// like "Icterine" and "Pastel Yellow" tellable apart; the names are the
+// SDK's, spaced for reading.
+// index 0 is the shipped default, per the rule in settings.h, and Picton
+// Blue follows it: the two colours the app has ever shipped with, kept at
+// the top where the cursor lands, before the sweep.
+#define COLOR_OPTIONS 64
+static const char *const s_color_names[COLOR_OPTIONS] = {
+  "Malachite",                 "Picton Blue",               "Bulgarian Rose",            "Dark Candy Apple Red",
+  "Jazzberry Jam",             "Red",                       "Folly",                     "Rose Vale",
+  "Sunset Orange",             "Brilliant Rose",            "Melon",                     "Windsor Tan",
+  "Orange",                    "Chrome Yellow",             "Rajah",                     "Army Green",
+  "Kelly Green",               "Limerick",                  "Brass",                     "Spring Bud",
+  "Inchworm",                  "Yellow",                    "Icterine",                  "Pastel Yellow",
+  "Dark Green",                "Midnight Green",            "Islamic Green",             "Jaeger Green",
+  "Tiffany Blue",              "May Green",                 "Cadet Blue",                "Green",
+  "Medium Spring Green",       "Bright Green",              "Cyan",                      "Screamin Green",
+  "Medium Aquamarine",         "Electric Blue",             "Mint Green",                "Celeste",
+  "Oxford Blue",               "Duke Blue",                 "Blue",                      "Cobalt Blue",
+  "Blue Moon",                 "Liberty",                   "Very Light Blue",           "Vivid Cerulean",
+  "Baby Blue Eyes",            "Indigo",                    "Electric Ultramarine",      "Vivid Violet",
+  "Lavender Indigo",           "Imperial Purple",           "Purple",                    "Fashion Magenta",
+  "Magenta",                   "Purpureus",                 "Shocking Pink",             "Rich Brilliant Lavender",
+  "Black",                     "Dark Gray",                 "Light Gray",                "White",
+};
+static const GColor s_color_values[COLOR_OPTIONS] = {
+  GColorMalachite,             GColorPictonBlue,            GColorBulgarianRose,         GColorDarkCandyAppleRed,
+  GColorJazzberryJam,          GColorRed,                   GColorFolly,                 GColorRoseVale,
+  GColorSunsetOrange,          GColorBrilliantRose,         GColorMelon,                 GColorWindsorTan,
+  GColorOrange,                GColorChromeYellow,          GColorRajah,                 GColorArmyGreen,
+  GColorKellyGreen,            GColorLimerick,              GColorBrass,                 GColorSpringBud,
+  GColorInchworm,              GColorYellow,                GColorIcterine,              GColorPastelYellow,
+  GColorDarkGreen,             GColorMidnightGreen,         GColorIslamicGreen,          GColorJaegerGreen,
+  GColorTiffanyBlue,           GColorMayGreen,              GColorCadetBlue,             GColorGreen,
+  GColorMediumSpringGreen,     GColorBrightGreen,           GColorCyan,                  GColorScreaminGreen,
+  GColorMediumAquamarine,      GColorElectricBlue,          GColorMintGreen,             GColorCeleste,
+  GColorOxfordBlue,            GColorDukeBlue,              GColorBlue,                  GColorCobaltBlue,
+  GColorBlueMoon,              GColorLiberty,               GColorVeryLightBlue,         GColorVividCerulean,
+  GColorBabyBlueEyes,          GColorIndigo,                GColorElectricUltramarine,   GColorVividViolet,
+  GColorLavenderIndigo,        GColorImperialPurple,        GColorPurple,                GColorFashionMagenta,
+  GColorMagenta,               GColorPurpureus,             GColorShockingPink,          GColorRichBrilliantLavender,
+  GColorBlack,                 GColorDarkGray,              GColorLightGray,             GColorWhite,
+};
+#endif
+
+/*******************************************************************************
+ * THE TWO GROUPS
+ *
+ * The settings come in two groups, named by their enum prefixes: the
+ * `SettingList` three change how the timer list behaves, the `SettingTimer` three
+ * how a timer itself behaves. On every platform but aplite each group is a
+ * sub-menu of its own, so the settings list shows two rows -- `List` and `Timer`
+ * -- with the one setting that belongs to neither, Accent Color, beside them.
+ *
+ * aplite has none of this: every setting is an inline row in its timer list,
+ * grouped or not, and it cannot afford the windows this grouping needs. Because
+ * the group tables and their accessors are read only by main.c's sub-menu wiring
+ * -- itself compiled out on aplite -- the whole block is compiled out there too,
+ * so the bytes do not touch aplite's 24 KB.
+ */
+
+#ifndef PBL_PLATFORM_APLITE
+
+static const char *const s_group_names[SettingsGroupCount] = {
+  "List", "Timer",
+};
+static const uint8_t s_list_setting_rows[] = {
+  SettingListSortOrder, SettingListGroup, SettingListWrapAround,
+};
+static const uint8_t s_timer_setting_rows[] = {
+  SettingTimerStartMode, SettingTimerDeleteConfirm, SettingTimerSnoozeLength,
+};
+static const uint8_t s_settings_rows[] = {
+  SETTINGS_ROW_GROUP(SettingsGroupList),
+  SETTINGS_ROW_GROUP(SettingsGroupTimer),
+#ifdef PBL_COLOR
+  SettingColor,
+#endif
+};
+
+#endif  // PBL_PLATFORM_APLITE
+
+/*******************************************************************************
+ * API -- VALUES AND COPY
+ */
+
+uint8_t settings_get(SettingId setting) {
+  switch (setting) {
+    case SettingListSortOrder:
+      return s_list_sort_by_last_used ? 1 : 0;
+    case SettingListGroup:
+      return s_list_grouping_disabled ? 1 : 0;
+    case SettingListWrapAround:
+      return s_list_wrap_around_enabled ? 1 : 0;
+    case SettingTimerStartMode:
+      return s_timer_start_automatically ? 1 : 0;
+    case SettingTimerDeleteConfirm:
+      // Off is listed first but On -- confirm first -- is the shipped default, so
+      // the index and the bool run opposite ways here. see the note on the table.
+      return s_timer_delete_immediately ? 0 : 1;
+    case SettingTimerSnoozeLength:
+      return s_timer_snooze_option;
+#ifdef PBL_COLOR
+    case SettingColor:
+      for (uint8_t i = 0; i < COLOR_OPTIONS; i++) {
+        if (gcolor_equal(s_color_values[i], s_highlight_color)) {
+          return i;
+        }
+      }
+      return 0;  // a colour outside the palette reads as the default
+#endif
+    default:
+      return 0;
+  }
+}
+
+void settings_set(SettingId setting, uint8_t option) {
+  switch (setting) {
+    case SettingListSortOrder:
+      s_list_sort_by_last_used = (option != 0);
+      break;
+    case SettingListGroup:
+      s_list_grouping_disabled = (option != 0);
+      break;
+    case SettingListWrapAround:
+      s_list_wrap_around_enabled = (option != 0);
+      break;
+    case SettingTimerStartMode:
+      s_timer_start_automatically = (option != 0);
+      break;
+    case SettingTimerDeleteConfirm:
+      // option 0 is "Off" -- no confirmation -- which is the same thing as
+      // deleting immediately. inverse of the index, per the note in settings_get
+      s_timer_delete_immediately = (option == 0);
+      break;
+    case SettingTimerSnoozeLength:
+      s_timer_snooze_option = (option < SNOOZE_OPTIONS) ? option : 0;
+      break;
+#ifdef PBL_COLOR
+    case SettingColor:
+      s_highlight_color = s_color_values[option];
+      break;
+#endif
+    default:
+      break;
+  }
+}
+
+uint8_t settings_option_count(SettingId setting) {
+  switch (setting) {
+    case SettingTimerSnoozeLength:
+      return SNOOZE_OPTIONS;
+#ifdef PBL_COLOR
+    case SettingColor:
+      return COLOR_OPTIONS;
+#endif
+    default:
+      return 2;
+  }
+}
+
+const char *const *settings_option_labels(SettingId setting) {
+#ifdef PBL_COLOR
+  if (setting == SettingColor) {
+    return s_color_names;
+  }
+#endif
+  if (setting == SettingTimerSnoozeLength) {
+    return s_snooze_options;
+  }
+  if (setting < SettingCount) {
+    return s_setting_options[setting];
+  }
+  // error handling
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Attempted to access setting outside the enum");
+  return s_setting_options[0];
+}
+
+const GColor *settings_option_swatches(SettingId setting) {
+#ifdef PBL_COLOR
+  if (setting == SettingColor) {
+    return s_color_values;
+  }
+#else
+  (void)setting;
+#endif
+  return NULL;
+}
+
+const char *settings_name(SettingId setting) {
+  if (setting < SettingCount) {
+    return s_setting_names[setting];
+  }
+  // error handling
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Attempted to access setting outside the enum");
+  return "";
+}
+
+const char *settings_value(SettingId setting) {
+  if (setting >= SettingCount) {
+    // error handling
+    APP_LOG(APP_LOG_LEVEL_ERROR, "Attempted to access setting outside the enum");
+    return "";
+  }
+#ifdef PBL_COLOR
+  if (setting == SettingColor) {
+    return s_color_names[settings_get(SettingColor)];
+  }
+#endif
+  if (setting == SettingTimerSnoozeLength) {
+    return s_snooze_options[settings_get(SettingTimerSnoozeLength)];
+  }
+  return s_setting_options[setting][settings_get(setting)];
+}
+
+#ifndef PBL_PLATFORM_APLITE
+const uint8_t *settings_group_rows(SettingsGroup group, uint8_t *count) {
+  if (group == SettingsGroupList) {
+    *count = sizeof(s_list_setting_rows) / sizeof(s_list_setting_rows[0]);
+    return s_list_setting_rows;
+  }
+  *count = sizeof(s_timer_setting_rows) / sizeof(s_timer_setting_rows[0]);
+  return s_timer_setting_rows;
+}
+
+const uint8_t *settings_top_rows(uint8_t *count) {
+  *count = sizeof(s_settings_rows) / sizeof(s_settings_rows[0]);
+  return s_settings_rows;
+}
+
+const char *settings_group_name(SettingsGroup group) {
+  if (group < SettingsGroupCount) {
+    return s_group_names[group];
+  }
+  // error handling
+  APP_LOG(APP_LOG_LEVEL_ERROR, "Attempted to access settings group outside the enum");
+  return "";
+}
+#endif  // PBL_PLATFORM_APLITE
+
+/*******************************************************************************
+ * API -- BEHAVIOUR READS
+ */
+
+bool settings_list_grouping_disabled(void) {
+  return s_list_grouping_disabled;
+}
+
+bool settings_list_sort_by_last_used(void) {
+  return s_list_sort_by_last_used;
+}
+
+bool settings_list_wrap_around(void) {
+  return s_list_wrap_around_enabled;
+}
+
+bool settings_timer_start_automatically(void) {
+  return s_timer_start_automatically;
+}
+
+bool settings_timer_delete_immediately(void) {
+  return s_timer_delete_immediately;
+}
+
+bool settings_timer_snooze_enabled(void) {
+  return s_timer_snooze_option != SNOOZE_OPTION_OFF;
+}
+
+int64_t settings_timer_snooze_delay(void) {
+  return s_snooze_delays[s_timer_snooze_option];
+}
+
+#ifdef PBL_COLOR
+GColor settings_colour(void) {
+  return s_highlight_color;
+}
+#endif
+
+/*******************************************************************************
+ * API -- PERSISTENCE
+ */
+
+void settings_load(void) {
+  if (persist_exists(TIMER_SORT_BY_DURATION_PERSIST_KEY)) {
+    // stored int keeps 1.2.6's meaning: 1 = sort by duration. this fork
+    // defaults to duration, so the variable is its inverse
+    s_list_sort_by_last_used = (persist_read_int(TIMER_SORT_BY_DURATION_PERSIST_KEY) == 0);
+  }
+  if (persist_exists(TIMER_GROUPING_DISABLED_PERSIST_KEY)) {
+    // a key this fork introduced, so it stores the bool's own meaning: no
+    // 1.2.6 contract to honour and no inversion at the load boundary
+    s_list_grouping_disabled = (persist_read_int(TIMER_GROUPING_DISABLED_PERSIST_KEY) != 0);
+  }
+  if (persist_exists(TIMER_WRAP_AROUND_PERSIST_KEY)) {
+    // the same: a key of this fork's, storing its bool's own meaning
+    s_list_wrap_around_enabled = (persist_read_int(TIMER_WRAP_AROUND_PERSIST_KEY) != 0);
+  }
+  if (persist_exists(TIMER_START_MANUALLY_PERSIST_KEY)) {
+    // same contract: 1 = start manually, and the fork's default inverts it
+    s_timer_start_automatically = (persist_read_int(TIMER_START_MANUALLY_PERSIST_KEY) == 0);
+  }
+  if (persist_exists(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY)) {
+    s_timer_delete_immediately = (persist_read_int(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY) != 0);
+  }
+  if (persist_exists(TIMER_SNOOZE_PERSIST_KEY)) {
+    int saved = persist_read_int(TIMER_SNOOZE_PERSIST_KEY);
+    s_timer_snooze_option = (saved >= 0 && saved < SNOOZE_OPTIONS) ? (uint8_t)saved : 0;
+  }
+#ifdef PBL_COLOR
+  if (persist_exists(TIMER_HIGHLIGHT_COLOR_PERSIST_KEY)) {
+    s_highlight_color = (GColor) {
+      .argb = (uint8_t)persist_read_int(TIMER_HIGHLIGHT_COLOR_PERSIST_KEY)
+    };
+  }
+#endif
+}
+
+void settings_write(void) {
+  persist_write_int(TIMER_SORT_BY_DURATION_PERSIST_KEY, s_list_sort_by_last_used ? 0 : 1);
+  persist_write_int(TIMER_GROUPING_DISABLED_PERSIST_KEY, s_list_grouping_disabled ? 1 : 0);
+  persist_write_int(TIMER_WRAP_AROUND_PERSIST_KEY, s_list_wrap_around_enabled ? 1 : 0);
+  persist_write_int(TIMER_START_MANUALLY_PERSIST_KEY, s_timer_start_automatically ? 0 : 1);
+  persist_write_int(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY, s_timer_delete_immediately ? 1 : 0);
+  persist_write_int(TIMER_SNOOZE_PERSIST_KEY, s_timer_snooze_option);
+#ifdef PBL_COLOR
+  persist_write_int(TIMER_HIGHLIGHT_COLOR_PERSIST_KEY, s_highlight_color.argb);
+#endif
+}
