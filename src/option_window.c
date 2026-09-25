@@ -129,16 +129,16 @@ static void option_draw_header_callback(GContext *ctx, const Layer *cell_layer,
 
 
 
-#ifdef PBL_ROUND
 /*
  * the menu cell title font the theme would have picked
  *
  * hand-drawing the label means losing the font menu_cell_basic_draw would
- * have chosen for us, and hardcoding one breaks emery and gabbro, which run
- * at Large. resolve it from preferred_content_size() instead, the way
- * system_theme.c does. The bold flag picks between a size and its bold
- * twin; with no radio on round, that twin is the only thing marking which
- * option is committed, so every size must honour it -- including 28.
+ * have chosen for us, and hardcoding one breaks the Large platforms --
+ * emery on rect, gabbro on round. resolve it from preferred_content_size()
+ * instead, the way system_theme.c does. The bold flag picks between a size
+ * and its bold twin; wherever a row has no radio -- every round row and the
+ * rect colour screen -- that twin is the only thing marking which option is
+ * committed, so every size must honour it -- including 28.
  */
 
 static GFont option_title_font(bool bold) {
@@ -153,6 +153,8 @@ static GFont option_title_font(bool bold) {
   }
 }
 
+
+#ifdef PBL_ROUND
 /*
  * the vertical room one line of the title font actually takes
  *
@@ -237,14 +239,12 @@ static void option_draw_label(GContext *ctx, const Layer *cell_layer,
                               const OptionWindow *option_window, uint8_t row) {
   const GRect cell = layer_get_bounds(cell_layer);
   const char *label = option_window->labels[row];
-#ifdef PBL_ROUND
   const GFont font = option_title_font(row == option_window->selected_option);
+#ifdef PBL_ROUND
   const GRect text_box = GRect(OPTION_ROUND_TEXT_LEFT_INSET, 0,
                                cell.size.w - 2 * OPTION_ROUND_TEXT_LEFT_INSET, cell.size.h);
   const GTextAlignment align = GTextAlignmentCenter;
 #else
-  const GFont font = fonts_get_system_font(row == option_window->selected_option ?
-                                             FONT_KEY_GOTHIC_24_BOLD : FONT_KEY_GOTHIC_24);
   const GRect text_box = GRect(OPTION_RECT_TEXT_LEFT_INSET, 0,
     cell.size.w - OPTION_RECT_TEXT_LEFT_INSET - OPTION_RADIO_INSET, cell.size.h);
   const GTextAlignment align = GTextAlignmentLeft;
