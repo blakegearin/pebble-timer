@@ -24,11 +24,11 @@ with `settings_window`. Do not reintroduce the collision.
 
 - **Duration** -- the length dialled in on the duration picker.
 - **Setting** -- one of the app's preferences (`Sort Order`, `Group`, `Start
-  Timers`, `Delete`, and -- on the colour platforms only -- `Color`). Named by
-  `SettingId` in `settings.h`.
-- **Option** -- one choice within one setting (`Last Used` / `Duration`).
-  Every setting has two options except `Color`, whose options are the eight
-  palette swatches in `s_color_values` in `main.c`.
+  Timers`, `Delete`, and -- on the colour platforms only -- `Accent Color`).
+  Named by `SettingId` in `settings.h`.
+- **Option** -- one choice within one setting (`Recency` / `Duration`).
+  Every setting has two options except `Accent Color`, whose options are the
+  sixty-four palette swatches in `s_color_values` in `main.c`.
 - **Armed delete** -- the in-place confirm state on the detail window's action
   bar, not a separate confirmation screen.
 
@@ -36,7 +36,8 @@ with `settings_window`. Do not reintroduce the collision.
 
 `s_countdown_timers[]` is **always** in recency order: most recently used
 first, with running timers above paused -- that grouping is the `Group`
-setting, On by default, and Off makes the order purely by last use.
+setting, `Running First` by default, and `Off` makes the order purely by last
+use.
 `s_timer_view_indices[]` lays the selected sort over the top without
 disturbing it.
 

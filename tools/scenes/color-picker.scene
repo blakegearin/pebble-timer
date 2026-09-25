@@ -1,8 +1,9 @@
-# The Color picker, on the four platforms that have it. The tour ends at the
-# Options screen; this scene walks the one setting the black-and-white
+# The Accent Color picker, on the four platforms that have it. The tour ends at
+# the Options screen; this scene walks the one setting the black-and-white
 # platforms do not offer: aplite has no settings windows at all, and diorite
-# has them but no colour, so Color is in neither's enum. It opens the picker at
-# its shipped default, picks a swatch, and shows the whole app recoloured.
+# has them but no colour, so Accent Color is in neither's enum. It opens the
+# picker at its shipped default, picks a swatch, and shows the whole app
+# recoloured.
 #
 # Shot names are prefixed with the scene's own step counter, which restarts at
 # 01, so they are given distinct names (color-*) and copied from the scene's
@@ -18,10 +19,10 @@ press select        # confirm -- detail opens
 press back          # menu, cursor on the timer row
 press down          # to the cog row
 press select        # Settings
-press down 3        # to the Color row, which is last
-press select        # the colour picker, opening on Picton Blue
+press down 4        # to the Accent Color row, last since Group joined it
+press select        # the colour picker, opening on Malachite
 shot color-picker
-press down 3        # to Brilliant Rose
+press down 3        # to Dark Candy Apple Red, far end of the reds
 press select        # applies and pops back to settings
 shot color-chosen
 press back          # the recoloured list

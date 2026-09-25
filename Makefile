@@ -13,9 +13,9 @@
 ##   make check               diff the empty menu against the upstream baselines
 ##
 ## aplite has no cog row -- its settings are inline rows -- so its tour is a
-## separate scene with three shots rather than four. The Color setting is a
-## third scene, run on the four colour platforms only: aplite has no settings
-## windows and diorite is black and white, so Color exists on neither.
+## separate scene with three shots rather than four. The Accent Color setting
+## is a third scene, run on the four colour platforms only: aplite has no
+## settings windows and diorite is black and white, so it exists on neither.
 PLATFORMS := aplite basalt chalk diorite emery gabbro
 COLOUR    := basalt chalk emery gabbro
 BASELINED := aplite basalt chalk

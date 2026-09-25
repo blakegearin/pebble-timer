@@ -45,6 +45,7 @@
 #endif
 #define OPTION_RADIO_TEXT_GAP 6    //< breathing room between label and circle
 #define OPTION_ROUND_TEXT_LEFT_INSET 20
+#define OPTION_RECT_TEXT_LEFT_INSET 6  //< the inset menu_cell_basic_draw uses
 
 // same round menu-cell constants as the settings window (issue 01); without a
 // get_cell_height the rows fall to MenuLayer's 44 px default, which centres
@@ -77,6 +78,9 @@ struct OptionWindow {
   uint8_t     count;      //< number of labels
   uint8_t     selected_option; //< which option currently carries the filled dot
   GColor      highlight_color; //< main color for highlights
+  GColor      row_highlight;   //< live highlight of the focused row: the theme
+                               //   colour, or the swatch being previewed on
+                               //   the colour screen
 };
 
 
@@ -133,15 +137,19 @@ static void option_draw_header_callback(GContext *ctx, const Layer *cell_layer,
  * hand-drawing the label means losing the font menu_cell_basic_draw would
  * have chosen for us, and hardcoding one breaks emery and gabbro, which run
  * at Large. resolve it from preferred_content_size() instead, the way
- * system_theme.c does.
+ * system_theme.c does. The bold flag picks between a size and its bold
+ * twin -- 28 has no bold twin at Large, so there both weights are 28.
  */
 
-static GFont option_title_font(void) {
+static GFont option_title_font(bool bold) {
   switch (preferred_content_size()) {
-    case PreferredContentSizeSmall: return fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+    case PreferredContentSizeSmall:
+      return fonts_get_system_font(bold ? FONT_KEY_GOTHIC_18_BOLD : FONT_KEY_GOTHIC_18);
     case PreferredContentSizeLarge: return fonts_get_system_font(FONT_KEY_GOTHIC_28);
-    case PreferredContentSizeExtraLarge: return fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD);
-    default: return fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
+    case PreferredContentSizeExtraLarge:
+      return fonts_get_system_font(bold ? FONT_KEY_GOTHIC_28_BOLD : FONT_KEY_GOTHIC_28);
+    default:
+      return fonts_get_system_font(bold ? FONT_KEY_GOTHIC_24_BOLD : FONT_KEY_GOTHIC_24);
   }
 }
 #endif
@@ -155,10 +163,9 @@ static GFont option_title_font(void) {
  * the selected option. colours follow the highlight, never a literal
  * GColorBlack, which would disappear on a highlighted row.
  *
- * with swatches, every row carries its own colour as a chip inside the ring,
- * which is the only way the user can see each option before committing. the
- * ring keeps marking the current option -- a lone thin outline around the
- * other chips, the firmware's double ring around this one.
+ * only the plain settings call this. The colour screen has no circle: its
+ * focused row is painted in the colour it names and the committed value is
+ * the bold label. See option_draw_color_label.
  */
 
 static void option_draw_radio(GContext *ctx, const Layer *cell_layer,
@@ -176,30 +183,62 @@ static void option_draw_radio(GContext *ctx, const Layer *cell_layer,
   const GPoint center = GPoint(bounds.size.w - OPTION_RADIO_INSET - OPTION_RADIO_RADIUS,
                                center_y);
   const GColor color = menu_cell_layer_is_highlighted(cell_layer) ?
-                       gcolor_legible_over(option_window->highlight_color) : GColorBlack;
+                       gcolor_legible_over(option_window->row_highlight) : GColorBlack;
   graphics_context_set_stroke_color(ctx, color);
   graphics_context_set_fill_color(ctx, color);
-  if (option_window->swatches == NULL) {
-    graphics_draw_circle(ctx, center, OPTION_RADIO_RADIUS);
-    graphics_draw_circle(ctx, center, OPTION_RADIO_RADIUS - 1);
-    if (row == option_window->selected_option) {
-      graphics_fill_circle(ctx, center, OPTION_RADIO_DOT_RADIUS);
-    }
-    return;
-  }
+  graphics_draw_circle(ctx, center, OPTION_RADIO_RADIUS);
+  graphics_draw_circle(ctx, center, OPTION_RADIO_RADIUS - 1);
   if (row == option_window->selected_option) {
-    graphics_draw_circle(ctx, center, OPTION_RADIO_RADIUS);
-    graphics_draw_circle(ctx, center, OPTION_RADIO_RADIUS - 1);
+    graphics_fill_circle(ctx, center, OPTION_RADIO_DOT_RADIUS);
   }
-  graphics_draw_circle(ctx, center, OPTION_RADIO_DOT_RADIUS + 1);
-  graphics_context_set_fill_color(ctx, option_window->swatches[row]);
-  graphics_fill_circle(ctx, center, OPTION_RADIO_DOT_RADIUS);
 }
 
 
 
 /*
- * draw each row: the option label and the selection circle
+ * draw one label on the colour screen
+ *
+ * with no radio, weight is the only thing marking which colour is in use:
+ * bold for the committed value, regular for the rest, while the coloured
+ * band says where the cursor is. menu_cell_basic_draw is always-bold -- it
+ * drew these titles bold on every row -- so the label is hand-drawn
+ * instead. There is no circle, so no gutter to reserve either; the three-
+ * word names live at the end of the rainbow where they still mostly fit,
+ * and ellipsize rather than clip if they do not.
+ */
+
+static void option_draw_color_label(GContext *ctx, const Layer *cell_layer,
+                                    const OptionWindow *option_window, uint8_t row) {
+  const GRect cell = layer_get_bounds(cell_layer);
+  const char *label = option_window->labels[row];
+#ifdef PBL_ROUND
+  const GFont font = option_title_font(row == option_window->selected_option);
+  const GRect text_box = GRect(OPTION_ROUND_TEXT_LEFT_INSET, 0,
+                               cell.size.w - 2 * OPTION_ROUND_TEXT_LEFT_INSET, cell.size.h);
+  const GTextAlignment align = GTextAlignmentCenter;
+#else
+  const GFont font = fonts_get_system_font(row == option_window->selected_option ?
+                                             FONT_KEY_GOTHIC_24_BOLD : FONT_KEY_GOTHIC_24);
+  const GRect text_box = GRect(OPTION_RECT_TEXT_LEFT_INSET, 0,
+    cell.size.w - OPTION_RECT_TEXT_LEFT_INSET - OPTION_RADIO_INSET, cell.size.h);
+  const GTextAlignment align = GTextAlignmentLeft;
+#endif
+  const GSize used = graphics_text_layout_get_content_size(label, font, text_box,
+                                                           GTextOverflowModeTrailingEllipsis,
+                                                           align);
+  const GRect text = GRect(text_box.origin.x, (cell.size.h - used.h) / 2,
+                           text_box.size.w, used.h);
+  graphics_context_set_text_color(ctx, menu_cell_layer_is_highlighted(cell_layer) ?
+                                  gcolor_legible_over(option_window->row_highlight) :
+                                  GColorBlack);
+  graphics_draw_text(ctx, label, font, text, GTextOverflowModeTrailingEllipsis, align, NULL);
+}
+
+
+
+/*
+ * draw each row: on the colour screen just the label, elsewhere the option
+ * label and its selection circle
  */
 
 static void option_draw_row_callback(GContext *ctx, const Layer *cell_layer,
@@ -208,12 +247,17 @@ static void option_draw_row_callback(GContext *ctx, const Layer *cell_layer,
   const uint8_t row = (uint8_t)cell_index->row;
   const char *label = option_window->labels[row];
 
+  if (option_window->swatches != NULL) {
+    option_draw_color_label(ctx, cell_layer, option_window, row);
+    return;
+  }
+
 #ifdef PBL_ROUND
   // Round centres text in menu_cell_basic_draw, which drives long labels like
   // "Automatically" straight into the selection circle. The firmware hits the
   // same problem and right-aligns instead, so do that.
   const GRect cell = layer_get_bounds(cell_layer);
-  const GFont font = option_title_font();
+  const GFont font = option_title_font(true);
   const GRect text_box = GRect(OPTION_ROUND_TEXT_LEFT_INSET, 0,
     cell.size.w - OPTION_RADIO_INSET - 2 * OPTION_RADIO_RADIUS - OPTION_RADIO_TEXT_GAP -
       OPTION_ROUND_TEXT_LEFT_INSET, cell.size.h);
@@ -223,7 +267,7 @@ static void option_draw_row_callback(GContext *ctx, const Layer *cell_layer,
   const GRect text = GRect(text_box.origin.x, (cell.size.h - used.h) / 2,
                            text_box.size.w, used.h);
   graphics_context_set_text_color(ctx, menu_cell_layer_is_highlighted(cell_layer) ?
-                                  gcolor_legible_over(option_window->highlight_color) :
+                                  gcolor_legible_over(option_window->row_highlight) :
                                   GColorBlack);
   graphics_draw_text(ctx, label, font, text, GTextOverflowModeFill, GTextAlignmentRight, NULL);
 #else
@@ -249,6 +293,30 @@ static void option_select_callback(MenuLayer *menu_layer, MenuIndex *cell_index,
   const uint8_t option = (uint8_t)cell_index->row;
   window_stack_remove(option_window->window, true);
   option_window->selected(option, option_window->context);
+}
+
+
+
+/*
+ * live colour preview
+ *
+ * on the colour screen the focused row's background is the colour it names,
+ * so scrolling through the rainbow shows the choice at row size -- the only
+ * way to tell Icterine from Pastel Yellow before committing. This only
+ * repaints the picker: the app's theme colour changes on selection, nowhere
+ * earlier, so a BACK leaves nothing applied. The committed value stays findable
+ * while the cursor wanders: its label is the bold one.
+ */
+
+static void option_selection_changed_callback(MenuLayer *menu_layer, MenuIndex new_index,
+                                              MenuIndex old_index, void *context) {
+  OptionWindow *option_window = (OptionWindow*)context;
+  if (option_window->swatches == NULL) {
+    return;
+  }
+  option_window->row_highlight = option_window->swatches[new_index.row];
+  menu_layer_set_highlight_colors(menu_layer, option_window->row_highlight,
+                                  gcolor_legible_over(option_window->row_highlight));
 }
 
 #ifdef PBL_ROUND
@@ -285,14 +353,15 @@ static void option_window_load(Window *window) {
     .draw_header = option_draw_header_callback,
     .draw_row = option_draw_row_callback,
     .select_click = option_select_callback,
+    .selection_changed = option_selection_changed_callback,
 #ifdef PBL_ROUND
     .get_cell_height = option_get_cell_height_callback,
 #endif
   };
   menu_layer_set_callbacks(option_window->menu, option_window, callbacks);
   menu_layer_set_click_config_onto_window(option_window->menu, window);
-  menu_layer_set_highlight_colors(option_window->menu, option_window->highlight_color,
-                                  gcolor_legible_over(option_window->highlight_color));
+  menu_layer_set_highlight_colors(option_window->menu, option_window->row_highlight,
+                                  gcolor_legible_over(option_window->row_highlight));
   layer_add_child(root, menu_layer_get_layer(option_window->menu));
   // open on the option that is currently selected, like the system does
   menu_layer_set_selected_index(option_window->menu,
@@ -344,6 +413,7 @@ OptionWindow *option_window_create(OptionWindowSelectCallback selected, void *co
   option_window->count = 0;
   option_window->selected_option = 0;
   option_window->highlight_color = GColorBlack;
+  option_window->row_highlight = GColorBlack;
   option_window->window = window_create();
   window_set_user_data(option_window->window, option_window);
   window_set_window_handlers(option_window->window, (WindowHandlers) {
@@ -383,6 +453,10 @@ void option_window_push(OptionWindow *option_window, const char *title,
   option_window->swatches = swatches;
   option_window->count = count;
   option_window->selected_option = selected;
+  // open already previewing the current colour, so the picker agrees with
+  // the settings row behind it before the user moves the cursor at all
+  option_window->row_highlight = (swatches != NULL) ? swatches[selected]
+                                                    : option_window->highlight_color;
   window_stack_push(option_window->window, animated);
 }
 
@@ -395,7 +469,9 @@ void option_window_push(OptionWindow *option_window, const char *title,
 
 void option_window_set_highlight_color(OptionWindow *option_window, GColor color) {
   option_window->highlight_color = color;
-  if (option_window->menu) {
+  // a live swatch preview owns the focused row until the next push
+  if (option_window->menu && option_window->swatches == NULL) {
+    option_window->row_highlight = color;
     menu_layer_set_highlight_colors(option_window->menu, color, gcolor_legible_over(color));
   }
 }

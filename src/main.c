@@ -103,33 +103,64 @@ static int64_t s_last_activity = 0;
 static const char *const s_setting_names[SettingCount] = {
   "Sort Order", "Group", "Start Timers", "Delete",
 #ifdef PBL_COLOR
-  "Color",
+  "Accent Color",
 #endif
 };
 static const char *const s_setting_options[SettingCount][2] = {
-  { "Duration",      "Last Used"     },
-  { "On",            "Off"           },
+  { "Duration",      "Recency"       },
+  { "Running First", "Off"           },
   { "Manually",      "Automatically" },
   { "Confirm First", "Immediately"   },
 #ifdef PBL_COLOR
-  { NULL, NULL },  // Color's options are the palette below, not this table
+  { NULL, NULL },  // Accent Color's options are the palette below, not this table
 #endif
 };
 #ifdef PBL_COLOR
-// the Color setting's options: eight of the sixty-four colours a colour
-// platform can actually render, covering the wheel so a choice reads as a
-// new direction, not a shade of the last one. the names are the SDK's.
-// index 0 is the shipped default, per the rule above: the table is rotated to
-// start there, which keeps the wheel-adjacent spacing intact -- Malachite wraps
-// back to Picton Blue.
-#define COLOR_OPTIONS 8
+// the Accent Color setting's options: all sixty-four colours a colour platform can
+// render, in rainbow order -- red, orange, yellow, green, blue, indigo,
+// violet, dark to light within each band -- with the four true greys last.
+// The live preview on the picker (option_window.c) is what makes neighbours
+// like "Icterine" and "Pastel Yellow" tellable apart; the names are the
+// SDK's, spaced for reading.
+// index 0 is the shipped default, per the rule in settings.h, and Picton
+// Blue follows it: the two colours the app has ever shipped with, kept at
+// the top where the cursor lands, before the sweep.
+#define COLOR_OPTIONS 64
 static const char *const s_color_names[COLOR_OPTIONS] = {
-  "Malachite",      "Picton Blue",   "Blue Moon",      "Vivid Violet",
-  "Brilliant Rose", "Folly",         "Sunset Orange",  "Chrome Yellow",
+  "Malachite",                 "Picton Blue",               "Bulgarian Rose",            "Dark Candy Apple Red",
+  "Jazzberry Jam",             "Red",                       "Folly",                     "Rose Vale",
+  "Sunset Orange",             "Brilliant Rose",            "Melon",                     "Windsor Tan",
+  "Orange",                    "Chrome Yellow",             "Rajah",                     "Army Green",
+  "Kelly Green",               "Limerick",                  "Brass",                     "Spring Bud",
+  "Inchworm",                  "Yellow",                    "Icterine",                  "Pastel Yellow",
+  "Dark Green",                "Midnight Green",            "Islamic Green",             "Jaeger Green",
+  "Tiffany Blue",              "May Green",                 "Cadet Blue",                "Green",
+  "Medium Spring Green",       "Bright Green",              "Cyan",                      "Screamin Green",
+  "Medium Aquamarine",         "Electric Blue",             "Mint Green",                "Celeste",
+  "Oxford Blue",               "Duke Blue",                 "Blue",                      "Cobalt Blue",
+  "Blue Moon",                 "Liberty",                   "Very Light Blue",           "Vivid Cerulean",
+  "Baby Blue Eyes",            "Indigo",                    "Electric Ultramarine",      "Vivid Violet",
+  "Lavender Indigo",           "Imperial Purple",           "Purple",                    "Fashion Magenta",
+  "Magenta",                   "Purpureus",                 "Shocking Pink",             "Rich Brilliant Lavender",
+  "Black",                     "Dark Gray",                 "Light Gray",                "White",
 };
 static const GColor s_color_values[COLOR_OPTIONS] = {
-  GColorMalachite,  GColorPictonBlue, GColorBlueMoon,  GColorVividViolet,
-  GColorBrilliantRose, GColorFolly,   GColorSunsetOrange, GColorChromeYellow,
+  GColorMalachite,             GColorPictonBlue,            GColorBulgarianRose,         GColorDarkCandyAppleRed,
+  GColorJazzberryJam,          GColorRed,                   GColorFolly,                 GColorRoseVale,
+  GColorSunsetOrange,          GColorBrilliantRose,         GColorMelon,                 GColorWindsorTan,
+  GColorOrange,                GColorChromeYellow,          GColorRajah,                 GColorArmyGreen,
+  GColorKellyGreen,            GColorLimerick,              GColorBrass,                 GColorSpringBud,
+  GColorInchworm,              GColorYellow,                GColorIcterine,              GColorPastelYellow,
+  GColorDarkGreen,             GColorMidnightGreen,         GColorIslamicGreen,          GColorJaegerGreen,
+  GColorTiffanyBlue,           GColorMayGreen,              GColorCadetBlue,             GColorGreen,
+  GColorMediumSpringGreen,     GColorBrightGreen,           GColorCyan,                  GColorScreaminGreen,
+  GColorMediumAquamarine,      GColorElectricBlue,          GColorMintGreen,             GColorCeleste,
+  GColorOxfordBlue,            GColorDukeBlue,              GColorBlue,                  GColorCobaltBlue,
+  GColorBlueMoon,              GColorLiberty,               GColorVeryLightBlue,         GColorVividCerulean,
+  GColorBabyBlueEyes,          GColorIndigo,                GColorElectricUltramarine,   GColorVividViolet,
+  GColorLavenderIndigo,        GColorImperialPurple,        GColorPurple,                GColorFashionMagenta,
+  GColorMagenta,               GColorPurpureus,             GColorShockingPink,          GColorRichBrilliantLavender,
+  GColorBlack,                 GColorDarkGray,              GColorLightGray,             GColorWhite,
 };
 #endif
 
@@ -290,7 +321,7 @@ static void prv_promote_timer(CountdownTimer *countdown_timer) {
    * the list opens with the cursor on the timer you last used
    *
     * the order is untouched -- a timer created paused still lands below every
-    * running one when Group is On -- but selection follows use. all four acting
+    * running one when Group is Running First -- but selection follows use. all four acting
     * paths (create, edit, play/pause, snooze) already funnel through here, so
     * this one place covers them all. delete and timer-expiry never promote,
     * and so never steal the cursor: a deleted timer has no row to land on, and
@@ -448,8 +479,8 @@ static void app_timer_callback(void *data) {
     s_countdown_timers_count);
 
   if (countdown_timer != NULL) {
-    // a timer just expired and is now paused; re-sort so, when Group is On,
-    // it drops below any still-running timers
+    // a timer just expired and is now paused; re-sort so, when Group is
+    // Running First, it drops below any still-running timers
     prv_timers_changed();
     // deep refresh the DetailWindow in case it was that timer
     detail_window_deep_refresh(s_detail_window);

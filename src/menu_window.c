@@ -201,7 +201,10 @@ static void menu_draw_row_callback(GContext* ctx, const Layer *cell_layer, MenuI
   // draw contents by row kind
   switch (menu_window_row_kind(menu_window, cell_index->row)) {
     case MenuRowAdd: {
-      menu_cell_draw(ctx, cell_layer, "+", NULL, 0, fonts_get_system_font(FONT_KEY_GOTHIC_28),
+      // bitham 42 light puts the "+" ink box near the 25 px cog it sits
+      // beside, at a stroke weight that matches it; gothic caps out at 28,
+      // whose "+" is only a 12 px ink box.
+      menu_cell_draw(ctx, cell_layer, "+", NULL, 0, fonts_get_system_font(FONT_KEY_BITHAM_42_LIGHT),
         true, GColorBlack, GColorWhite);
       break;
     }
