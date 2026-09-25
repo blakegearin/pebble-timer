@@ -38,7 +38,7 @@
 
 #define REPEATING_CLICK_THRESHOLD 10
 
-#define TIMER_MINIMUM_DURATION 5000 // milliseconds
+#define TIMER_MINIMUM_DURATION 1000 // milliseconds
 #define TIMELINE_MINIMUM_DURATION 900000 // milliseconds
 
 

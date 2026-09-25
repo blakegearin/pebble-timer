@@ -4,7 +4,7 @@ A countdown timer for Pebble smartwatches, forked from Pebble's `pebble-timer` a
 
 ## Features
 
-- Choose your own accent color (colour platforms only)
+- Choose your own accent color
 - Sort timers by duration or creation
 - Pause or start a timer on create
 - Extra confirmation to avoid accidental deletions
