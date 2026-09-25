@@ -160,7 +160,7 @@ int64_t settings_timer_snooze_delay(void);
 // The picker dials the delay instead of the option list; zero is Off
 void settings_timer_snooze_delay_set(int64_t delay_ms);
 #ifdef PBL_COLOR
-GColor settings_colour(void);
+GColor settings_color(void);
 #endif
 
 

@@ -38,6 +38,7 @@
 
 #define TEXT_LAYER_MAX_LARGE_CHARACTERS 5
 #define MSEC_IN_SEC 1000
+#define DELETE_ARM_TIMEOUT_MS 2500  //< how long an armed delete stays armed
 
 /*******************************************************************************
  * STRUCTURE DEFINITION
@@ -231,7 +232,8 @@ static void down_click_handler(ClickRecognizerRef recognizer, void *context) {
     app_timer_cancel(detail_window->delete_arm_timer);
     detail_window->delete_arm_timer = NULL;
   }
-  detail_window->delete_arm_timer = app_timer_register(2500, prv_delete_arm_timer_callback,
+  detail_window->delete_arm_timer = app_timer_register(DELETE_ARM_TIMEOUT_MS,
+                                                       prv_delete_arm_timer_callback,
                                                        detail_window);
   prv_update_action_icons(detail_window);
   detail_window_refresh(detail_window);

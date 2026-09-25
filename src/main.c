@@ -300,14 +300,14 @@ static void prv_set_timer_running(CountdownTimer *countdown_timer, bool running)
  * that own the settings and option windows.
  */
 static void prv_apply_highlight_color(void) {
-  menu_window_set_highlight_color(s_menu_window, settings_colour());
-  detail_window_set_highlight_color(s_detail_window, settings_colour());
-  duration_window_set_highlight_color(s_duration_window, settings_colour());
-  popup_window_set_highlight_color(s_popup_window, settings_colour());
-  settings_window_set_highlight_color(s_settings_window, settings_colour());
-  settings_window_set_highlight_color(s_list_window, settings_colour());
-  settings_window_set_highlight_color(s_timer_window, settings_colour());
-  option_window_set_highlight_color(s_option_window, settings_colour());
+  menu_window_set_highlight_color(s_menu_window, settings_color());
+  detail_window_set_highlight_color(s_detail_window, settings_color());
+  duration_window_set_highlight_color(s_duration_window, settings_color());
+  popup_window_set_highlight_color(s_popup_window, settings_color());
+  settings_window_set_highlight_color(s_settings_window, settings_color());
+  settings_window_set_highlight_color(s_list_window, settings_color());
+  settings_window_set_highlight_color(s_timer_window, settings_color());
+  option_window_set_highlight_color(s_option_window, settings_color());
 }
 #endif
 
@@ -333,17 +333,24 @@ static void prv_set_setting(SettingId setting, uint8_t option) {
       // the menu window owns the cursor, so hand it the new value now
       menu_window_set_wrap_around(s_menu_window, settings_list_wrap_around());
       break;
+    case SettingTimerStartMode:
+      // nothing renders this; the next timer start reads it
+      break;
     case SettingTimerDeleteConfirm:
       // the detail window owns the arming, so hand it the new value now
       detail_window_set_delete_immediately(s_detail_window, settings_timer_delete_immediately());
+      break;
+    case SettingTimerSnoozeLength:
+      // dialled through the picker, whose own callback carries the reaction;
+      // this switch covers the option-list settings
+    case SettingCount:
+      // the sentinel is never a setting
       break;
 #ifdef PBL_COLOR
     case SettingColor:
       prv_apply_highlight_color();
       break;
 #endif
-    default:
-      break;
   }
 }
 
@@ -375,7 +382,7 @@ static void app_timer_callback(void *data) {
     // show timer confirmation window
     popup_window_set_countdown_timer(s_popup_window, countdown_timer);
     popup_window_set_title(s_popup_window, "Time's Up!");
-    popup_window_set_highlight_color(s_popup_window, PBL_IF_COLOR_ELSE(settings_colour(), GColorWhite));
+    popup_window_set_highlight_color(s_popup_window, PBL_IF_COLOR_ELSE(settings_color(), GColorWhite));
 #ifdef PBL_PLATFORM_APLITE
     popup_window_set_image(s_popup_window, RESOURCE_ID_IMAGE_ALARM);
 #else
@@ -618,7 +625,7 @@ static void detail_window_delete_timer_callback(CountdownTimer *countdown_timer,
 
   // show timer confirmation window
   popup_window_set_title(s_popup_window, "Timer Deleted");
-  popup_window_set_highlight_color(s_popup_window, PBL_IF_COLOR_ELSE(settings_colour(), GColorWhite));
+  popup_window_set_highlight_color(s_popup_window, PBL_IF_COLOR_ELSE(settings_color(), GColorWhite));
   // the shredder drops confetti past the bottom of its bounds, so the
   // title goes above the graphic here
   popup_window_set_text_above(s_popup_window, true);
@@ -894,7 +901,7 @@ static void initialize(void) {
     .clicked = menu_window_click_callback,
   };
   s_menu_window = menu_window_create(menu_callbacks, true);
-  menu_window_set_highlight_color(s_menu_window, PBL_IF_COLOR_ELSE(settings_colour(), GColorBlack));
+  menu_window_set_highlight_color(s_menu_window, PBL_IF_COLOR_ELSE(settings_color(), GColorBlack));
   // the cursor needs the setting it was loaded with before the list is walked
   menu_window_set_wrap_around(s_menu_window, settings_list_wrap_around());
   menu_window_refresh(s_menu_window);
@@ -906,14 +913,14 @@ static void initialize(void) {
     .delete_timer = detail_window_delete_timer_callback,
   };
   s_detail_window = detail_window_create(detail_callbacks);
-  detail_window_set_highlight_color(s_detail_window,PBL_IF_COLOR_ELSE(settings_colour(), GColorWhite));
+  detail_window_set_highlight_color(s_detail_window,PBL_IF_COLOR_ELSE(settings_color(), GColorWhite));
 
   // create duration window
   DurationWindowCallbacks duration_callbacks = {
     .duration_complete = duration_window_complete_callback,
   };
   s_duration_window = duration_window_create(duration_callbacks);
-  duration_window_set_highlight_color(s_duration_window, PBL_IF_COLOR_ELSE(settings_colour(), GColorBlack));
+  duration_window_set_highlight_color(s_duration_window, PBL_IF_COLOR_ELSE(settings_color(), GColorBlack));
 
   // create pop-up window
   PopupWindowCallbacks popup_callbacks = {
@@ -937,7 +944,7 @@ static void initialize(void) {
   };
   s_settings_window = settings_window_create(settings_callbacks, "Settings", top_rows, top_count);
   settings_window_set_highlight_color(s_settings_window,
-    PBL_IF_COLOR_ELSE(settings_colour(), GColorBlack));
+    PBL_IF_COLOR_ELSE(settings_color(), GColorBlack));
   // the two groups' own sub-menus, fed by the plain callbacks: every row in each
   // is a setting, so there is nothing extra to say about them
   SettingsWindowCallbacks group_callbacks = {
@@ -951,12 +958,12 @@ static void initialize(void) {
   s_timer_window = settings_window_create(group_callbacks, settings_group_name(SettingsGroupTimer),
     timer_rows, group_count);
   settings_window_set_highlight_color(s_list_window,
-    PBL_IF_COLOR_ELSE(settings_colour(), GColorBlack));
+    PBL_IF_COLOR_ELSE(settings_color(), GColorBlack));
   settings_window_set_highlight_color(s_timer_window,
-    PBL_IF_COLOR_ELSE(settings_colour(), GColorBlack));
+    PBL_IF_COLOR_ELSE(settings_color(), GColorBlack));
   s_option_window = option_window_create(option_window_selected_callback, NULL);
   option_window_set_highlight_color(s_option_window,
-    PBL_IF_COLOR_ELSE(settings_colour(), GColorBlack));
+    PBL_IF_COLOR_ELSE(settings_color(), GColorBlack));
 #endif
 
   // check wakeup in case launched by pin

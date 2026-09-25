@@ -25,7 +25,7 @@
  *      bool        settings_timer_snooze_enabled(void);
  *      int64_t     settings_timer_snooze_delay(void);
  *      void        settings_timer_snooze_delay_set(int64_t delay_ms);
- *      GColor      settings_colour(void);            // PBL_COLOR only
+ *      GColor      settings_color(void);            // PBL_COLOR only
  *      void        settings_load(void);
  *      void        settings_write(void);
  *
@@ -230,8 +230,6 @@ uint8_t settings_get(SettingId setting) {
       // Off is listed first but On -- confirm first -- is the shipped default, so
       // the index and the bool run opposite ways here. see the note on the table.
       return s_timer_delete_immediately ? 0 : 1;
-    // Snooze Length has no option index; its value is the dialled delay, and
-    // settings_value formats that directly
 #ifdef PBL_COLOR
     case SettingColor:
       for (uint8_t i = 0; i < COLOR_OPTIONS; i++) {
@@ -241,9 +239,15 @@ uint8_t settings_get(SettingId setting) {
       }
       return 0;  // a colour outside the palette reads as the default
 #endif
-    default:
+    case SettingTimerSnoozeLength:
+      // no option index to read; its value is the dialled delay, and
+      // settings_value formats that directly
+    case SettingCount:
+      // the sentinel is never a setting; reached only by a caller who
+      // cast a row id it should have checked first
       return 0;
   }
+  return 0;  // unreachable for in-enum values; keeps the non-void contract
 }
 
 void settings_set(SettingId setting, uint8_t option) {
@@ -265,13 +269,15 @@ void settings_set(SettingId setting, uint8_t option) {
       // deleting immediately. inverse of the index, per the note in settings_get
       s_timer_delete_immediately = (option == 0);
       break;
-    // Snooze Length is dialled, not chosen; see settings_timer_snooze_delay_set
 #ifdef PBL_COLOR
     case SettingColor:
       s_highlight_color = s_color_values[option];
       break;
 #endif
-    default:
+    case SettingTimerSnoozeLength:
+      // dialled, not chosen; see settings_timer_snooze_delay_set
+    case SettingCount:
+      // the sentinel is never a setting
       break;
   }
 }
@@ -432,7 +438,7 @@ void settings_timer_snooze_delay_set(int64_t delay_ms) {
 }
 
 #ifdef PBL_COLOR
-GColor settings_colour(void) {
+GColor settings_color(void) {
   return s_highlight_color;
 }
 #endif
