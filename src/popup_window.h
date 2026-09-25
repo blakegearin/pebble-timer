@@ -33,6 +33,8 @@
  *      void            popup_window_add_action_bar(PopupWindow *popup_window);
  *      void            popup_window_set_snooze_enabled(PopupWindow
  *                          *popup_window, bool enabled);
+ *      void            popup_window_set_text_above(PopupWindow
+ *                          *popup_window, bool above);
  *      void            popup_window_remove_action_bar(PopupWindow
  *                          *popup_window);
  *      void            popup_window_set_action_bar_callbacks(PopupWindow
@@ -317,6 +319,20 @@ void popup_window_add_action_bar(PopupWindow *popup_window);
  */
 
 void popup_window_set_snooze_enabled(PopupWindow *popup_window, bool enabled);
+
+
+
+/*
+ * Function:    popup_window_set_text_above
+ * ----------------------------------------
+ * sets whether the title sits above the graphic instead of below it;
+ * set before pushing, since the layers are placed when the window loads
+ *
+ *  popup_window: a pointer to the PopupWindow to configure
+ *  above: whether the title is placed over the graphic
+ */
+
+void popup_window_set_text_above(PopupWindow *popup_window, bool above);
 
 
 

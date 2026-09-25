@@ -52,6 +52,10 @@
 
 #define NUM_VIBE_INTERVALS 6
 
+#define TEXT_LAYER_HEIGHT 36  //< room for the bold 18pt title, up to two lines
+#define TITLE_LINE_HEIGHT 18  //< one line of FONT_KEY_GOTHIC_18_BOLD
+#define GRAPHIC_TEXT_GAP 4    //< vertical space between the graphic and the title
+
 /*******************************************************************************
  * MAIN LOCAL VARIABLES
  */
@@ -89,6 +93,7 @@ struct PopupWindow {
   int64_t     set_time, close_time;    //< time opened and time to close
   bool            action_visible;      //< whether the ActionBar is visible
   bool            snooze_enabled;      //< whether the ActionBar shows the snooze icon
+  bool            text_above;          //< title sits over the graphic, not under it
 
   GColor highlight_color;
   const char* title;
@@ -127,8 +132,12 @@ static void layer_update_proc(Layer *layer, GContext *ctx) {
 
 
 /*
- * resize the layers based on PDC or image size
- * this centers the layers in the window, accounting for the potential
+ * lay the graphic and the text out as one vertically centered group.
+ * which member is on top depends on the PDC: the shredder's confetti
+ * falls past the bottom of its bounds, so the deleted popup puts the
+ * title above (text_above); the alarm jumps upward while ringing, so
+ * Time's Up keeps it below.
+ * horizontally, both are centered in the space left of the potential
  * ActionBarLayer
  */
 
@@ -138,39 +147,41 @@ static void layers_center_in_window(PopupWindow *popup_window) {
 #else
   int16_t horiz_off = ACTION_BAR_WIDTH;
 #endif
+  GRect window_frame = layer_get_frame(window_get_root_layer(popup_window->window));
+
+  // measure the graphic (PDC on most platforms, a bitmap on aplite)
 #ifndef PBL_PLATFORM_APLITE
-  // change layer size based on PDC size, to center PDC
-  GSize pdc_frame = gdraw_command_sequence_get_bounds_size(popup_window->draw_sequence);
-  GRect window_frame = layer_get_frame(window_get_root_layer(popup_window->window));
-  GRect layer_frame = GRect(0, 0, pdc_frame.w, pdc_frame.h);
-  if (popup_window->action_visible) {
-    layer_frame.origin.x = (window_frame.size.w - horiz_off) / 2 - pdc_frame.w / 2;
-  } else {
-    layer_frame.origin.x = window_frame.size.w / 2 - pdc_frame.w / 2;
-  }
-  layer_frame.origin.y = window_frame.size.h / 2 - pdc_frame.h / 2;
-  layer_set_frame(popup_window->layer, layer_frame);
+  GSize graphic_size = gdraw_command_sequence_get_bounds_size(popup_window->draw_sequence);
 #else
-  // change layer size based on image size, to center image
-  GRect image_frame = gbitmap_get_bounds(popup_window->image);
-  GRect window_frame = layer_get_frame(window_get_root_layer(popup_window->window));
-  GRect layer_frame = image_frame;
-  if (popup_window->action_visible) {
-    layer_frame.origin.x = (window_frame.size.w - horiz_off) / 2 - image_frame.size.w / 2;
-  } else {
-    layer_frame.origin.x = window_frame.size.w / 2 - image_frame.size.w / 2;
-  }
-  layer_frame.origin.y = window_frame.size.h / 2 - image_frame.size.h / 2 - 7;
-  layer_set_frame(popup_window->layer, layer_frame);
+  GSize graphic_size = gbitmap_get_bounds(popup_window->image).size;
 #endif
 
-  // center the text layer
-  GRect text_frame = layer_get_frame(text_layer_get_layer(popup_window->text));
-  text_frame.size.w = layer_get_bounds(window_get_root_layer(popup_window->window)).size.w -
+  // wrap the title against the available width, then take its real height
+  int16_t text_width = window_frame.size.w -
     ((popup_window->action_visible) ? horiz_off : 0);
+  text_layer_set_size(popup_window->text, GSize(text_width, TEXT_LAYER_HEIGHT));
+  int16_t content_height = text_layer_get_content_size(popup_window->text).h;
+  int16_t text_height = (content_height > TITLE_LINE_HEIGHT)
+    ? content_height : TITLE_LINE_HEIGHT;
+
+  // center the whole group, then place each member within it
+  int16_t group_top = window_frame.size.h / 2 -
+    (graphic_size.h + GRAPHIC_TEXT_GAP + text_height) / 2;
+  int16_t graphic_top = popup_window->text_above
+    ? group_top + text_height + GRAPHIC_TEXT_GAP : group_top;
+  int16_t text_top = popup_window->text_above
+    ? group_top : group_top + graphic_size.h + GRAPHIC_TEXT_GAP;
+
+  GRect text_frame = GRect(0, text_top, text_width, TEXT_LAYER_HEIGHT);
   layer_set_frame(text_layer_get_layer(popup_window->text), text_frame);
-  text_frame.origin.x = text_frame.origin.y = 0;
-  layer_set_bounds(text_layer_get_layer(popup_window->text), text_frame);
+
+  GRect layer_frame = GRect(0, graphic_top, graphic_size.w, graphic_size.h);
+  if (popup_window->action_visible) {
+    layer_frame.origin.x = (window_frame.size.w - horiz_off) / 2 - graphic_size.w / 2;
+  } else {
+    layer_frame.origin.x = window_frame.size.w / 2 - graphic_size.w / 2;
+  }
+  layer_set_frame(popup_window->layer, layer_frame);
 }
 
 
@@ -277,13 +288,8 @@ static void prv_window_load(Window* window){
   layer_set_clips(popup_window->layer, false);
   layer_set_update_proc(popup_window->layer, layer_update_proc);
   layer_add_child(root, popup_window->layer);
-  // text
-#ifndef PBL_PLATFORM_APLITE
-  const int text_layer_origin_y = 125;
-#else
-  const int text_layer_origin_y = 110;
-#endif
-  popup_window->text = text_layer_create(GRect(0, text_layer_origin_y, bounds.size.w, 36));
+  // text; layers_center_in_window positions it below the graphic
+  popup_window->text = text_layer_create(GRect(0, 0, bounds.size.w, TEXT_LAYER_HEIGHT));
   text_layer_set_font(popup_window->text, fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD));
   text_layer_set_text_alignment(popup_window->text, GTextAlignmentCenter);
   text_layer_set_background_color(popup_window->text, GColorClear);
@@ -363,6 +369,8 @@ PopupWindow *popup_window_create(void) {
   popup_window->action_visible = false;
   // snooze is on unless main.c says otherwise before the next push
   popup_window->snooze_enabled = true;
+  // the title sits under the graphic unless main.c says otherwise
+  popup_window->text_above = false;
 #ifndef PBL_PLATFORM_APLITE
   popup_window->draw_sequence = NULL;
   popup_window->draw_frame = NULL;
@@ -588,6 +596,20 @@ void popup_window_add_action_bar(PopupWindow *popup_window) {
 
 void popup_window_set_snooze_enabled(PopupWindow *popup_window, bool enabled) {
   popup_window->snooze_enabled = enabled;
+}
+
+
+
+/*
+ * sets whether the title sits above the graphic instead of below it.
+ * the PDCs whose animation escapes the bottom of its bounds (the shredder
+ * dropping confetti) want the text above; the ones that leap upward
+ * (the ringing alarm clock) want it below.
+ * set before pushing: the layers are placed when the window loads
+ */
+
+void popup_window_set_text_above(PopupWindow *popup_window, bool above) {
+  popup_window->text_above = above;
 }
 
 

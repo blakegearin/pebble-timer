@@ -542,6 +542,8 @@ static void app_timer_callback(void *data) {
 #endif
     popup_window_set_auto_close_duration(s_popup_window, 15000);
     popup_window_set_snooze_enabled(s_popup_window, s_snooze_option != SNOOZE_OPTION_OFF);
+    // the alarm clock leaps upward while ringing, so the title stays below it
+    popup_window_set_text_above(s_popup_window, false);
     popup_window_add_action_bar(s_popup_window);
     popup_window_push(s_popup_window, true);
     popup_window_set_vibes();
@@ -755,6 +757,9 @@ static void detail_window_delete_timer_callback(CountdownTimer *countdown_timer,
   // show timer confirmation window
   popup_window_set_title(s_popup_window, "Timer Deleted");
   popup_window_set_highlight_color(s_popup_window, PBL_IF_COLOR_ELSE(s_highlight_color, GColorWhite));
+  // the shredder drops confetti past the bottom of its bounds, so the
+  // title goes above the graphic here
+  popup_window_set_text_above(s_popup_window, true);
 #ifdef PBL_PLATFORM_APLITE
   popup_window_set_image(s_popup_window, RESOURCE_ID_IMAGE_SHREADER);
   popup_window_set_auto_close_duration(s_popup_window, 1000);
