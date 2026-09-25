@@ -16,9 +16,8 @@ A window is named for **what it shows**, not for what the user does on it:
 | `option_window` | the options for one setting |
 | `popup_window` | a popup |
 
-`duration_window` was called `setting_window` until 2026-09-23. It was named
-for the *act* of setting a duration, which broke the rule above and collided
-with `settings_window`. Do not reintroduce the collision.
+`setting_window` is the tempting wrong name for `duration_window`: it names an
+act, not a display, and collides with `settings_window`.
 
 ## Terms
 
@@ -35,11 +34,11 @@ with `settings_window`. Do not reintroduce the collision.
   grouping), and `SettingListGroup` is the setting while the group rows are
   `SETTINGS_ROW_GROUP_*`.
 - **Option** -- one choice within one setting (`Recency` / `Duration`).
-  Every setting has two options except `Snooze Length`, whose options are the
-  six delays plus `Off` in `s_snooze_options` in `main.c`, and `Accent Color`,
-  whose options are the sixty-four palette swatches in `s_color_values` in
-  `main.c`. An On/Off pair is listed `Off, On`; the shipped default is wherever
-  the false static lands, which for `Confirm Deletion` is index 1.
+  Every setting has two options except `Snooze Length` -- a duration dialled
+  on the picker, where zero means `Off` -- and `Accent Color`, whose options
+  are the sixty-four palette swatches in `s_color_values` in `settings.c`. An
+  On/Off pair is listed `Off, On`; the shipped default is wherever the false
+  static lands, which for `Confirm Deletion` is index 1.
 - **Armed delete** -- the in-place confirm state on the detail window's action
   bar, not a separate confirmation screen. It is what `Confirm Deletion: On`
   gives you, and `Off` takes away.
@@ -59,8 +58,7 @@ A "timer index" in a `menu_window` signature is a **view** index.
 
 Six targets: `aplite` (Pebble/Pebble Steel), `basalt` (Time/Time Steel),
 `chalk` (Time Round), `diorite` (Pebble 2), `emery` (Time 2),
-`gabbro` (Round 2 -- colour and round, 260x260 per the SDK's platform table;
-the old "2 Duo / Core 2 Duo" label was wrong).
+`gabbro` (Round 2 -- colour and round, 260x260 per the SDK's platform table).
 
 The one line that matters: **aplite is the 24 KB platform, where compiled code
 lives in the same budget as data.** Adding a window *type* there costs RAM even

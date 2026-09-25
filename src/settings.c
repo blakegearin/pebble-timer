@@ -24,6 +24,7 @@
  *      bool        settings_timer_delete_immediately(void);
  *      bool        settings_timer_snooze_enabled(void);
  *      int64_t     settings_timer_snooze_delay(void);
+ *      void        settings_timer_snooze_delay_set(int64_t delay_ms);
  *      GColor      settings_colour(void);            // PBL_COLOR only
  *      void        settings_load(void);
  *      void        settings_write(void);
@@ -48,7 +49,11 @@
 #define TIMER_START_MANUALLY_PERSIST_KEY 51827394
 #define TIMER_DELETE_IMMEDIATELY_PERSIST_KEY 68013925
 #define TIMER_HIGHLIGHT_COLOR_PERSIST_KEY 19283746
-#define TIMER_SNOOZE_PERSIST_KEY 37492058
+// Snooze is a dialled duration, stored in milliseconds. The old key (37492058)
+// held an index into the list that is gone, so it is no longer read: upgrading
+// users land on the shipped 2-minute default. Mapping saved indexes onto
+// delays here would preserve their choice
+#define TIMER_SNOOZE_MS_PERSIST_KEY 84720913
 #define TIMER_WRAP_AROUND_PERSIST_KEY 64718293
 
 /*******************************************************************************
@@ -68,10 +73,12 @@ static bool s_list_grouping_disabled = false;
 static bool s_list_wrap_around_enabled = false;
 static bool s_timer_start_automatically = false;
 static bool s_timer_delete_immediately = false;
-// the Snooze Length setting is not a bool, so the rule above cannot name its
-// default either; index 0 is the shipped one ("1 Minute") and an absent persist
-// key leaves this initialiser untouched, exactly like the accent colour's
-static uint8_t s_timer_snooze_option = 0;
+// The Snooze Length setting is a dialled duration in milliseconds, not an
+// index into a list. Zero is Off. The shipped default -- 2 minutes -- lives in
+// this initialiser; an absent persist key leaves it untouched, like the accent
+// colour's
+#define SNOOZE_DEFAULT_MS 120000
+static int64_t s_timer_snooze_delay_ms = SNOOZE_DEFAULT_MS;
 #ifdef PBL_COLOR
 // the app's accent colour. not a bool, so the false-is-default rule above
 // cannot name it; the job is done here instead -- this initialiser is the
@@ -106,26 +113,18 @@ static const char *const s_setting_options[SettingCount][2] = {
   { "Off",           "On"            },
   { "Manually",      "Automatically" },
   { "Off",           "On"            },  // On = confirm first, the shipped default
-  { NULL, NULL },  // Snooze Length's options are the delay list below, not this table
+  { NULL, NULL },  // Snooze Length's "option" is a dialled duration, not this table
 #ifdef PBL_COLOR
   { NULL, NULL },  // Accent Color's options are the palette below, not this table
 #endif
 };
 
 /*
- * the Snooze Length setting's options: how long the alarm waits before going off
- * again when the snooze button is pressed. index 0 is the shipped default per the
- * rule in settings.h, and Off sits last as its own sentinel: delay 0 means the
- * popup shows no snooze icon at all.
+ * The Snooze Length setting's delay -- how long the alarm waits before going
+ * off again when the snooze button is pressed -- is dialled on the duration
+ * picker, not chosen from a list. Zero means Off: the popup shows no snooze
+ * icon at all.
  */
-#define SNOOZE_OPTIONS 7
-#define SNOOZE_OPTION_OFF (SNOOZE_OPTIONS - 1)
-static const char *const s_snooze_options[SNOOZE_OPTIONS] = {
-  "1 Minute", "5 Minutes", "10 Minutes", "15 Minutes", "30 Minutes", "1 Hour", "Off",
-};
-static const int64_t s_snooze_delays[SNOOZE_OPTIONS] = {
-  60000, 300000, 600000, 900000, 1800000, 3600000, 0,
-};
 
 #ifdef PBL_COLOR
 // the Accent Color setting's options: all sixty-four colours a colour platform can
@@ -231,8 +230,8 @@ uint8_t settings_get(SettingId setting) {
       // Off is listed first but On -- confirm first -- is the shipped default, so
       // the index and the bool run opposite ways here. see the note on the table.
       return s_timer_delete_immediately ? 0 : 1;
-    case SettingTimerSnoozeLength:
-      return s_timer_snooze_option;
+    // Snooze Length has no option index; its value is the dialled delay, and
+    // settings_value formats that directly
 #ifdef PBL_COLOR
     case SettingColor:
       for (uint8_t i = 0; i < COLOR_OPTIONS; i++) {
@@ -266,9 +265,7 @@ void settings_set(SettingId setting, uint8_t option) {
       // deleting immediately. inverse of the index, per the note in settings_get
       s_timer_delete_immediately = (option == 0);
       break;
-    case SettingTimerSnoozeLength:
-      s_timer_snooze_option = (option < SNOOZE_OPTIONS) ? option : 0;
-      break;
+    // Snooze Length is dialled, not chosen; see settings_timer_snooze_delay_set
 #ifdef PBL_COLOR
     case SettingColor:
       s_highlight_color = s_color_values[option];
@@ -281,8 +278,8 @@ void settings_set(SettingId setting, uint8_t option) {
 
 uint8_t settings_option_count(SettingId setting) {
   switch (setting) {
-    case SettingTimerSnoozeLength:
-      return SNOOZE_OPTIONS;
+    // Snooze Length is dialled, not cycled -- the rows that used to ask this
+    // for its seven options push the picker instead
 #ifdef PBL_COLOR
     case SettingColor:
       return COLOR_OPTIONS;
@@ -299,7 +296,8 @@ const char *const *settings_option_labels(SettingId setting) {
   }
 #endif
   if (setting == SettingTimerSnoozeLength) {
-    return s_snooze_options;
+    // no labels to offer -- the setting dials on the picker
+    return NULL;
   }
   if (setting < SettingCount) {
     return s_setting_options[setting];
@@ -329,6 +327,29 @@ const char *settings_name(SettingId setting) {
   return "";
 }
 
+/*
+ * The Snooze Length row's value is a dialled duration, not a list label, so it
+ * gets its own formatter. Compact clock style: "2 Min" survives as "2:00", an
+ * hour-plus as "1:05:30", seconds-only as "45 Sec".
+ */
+static const char *prv_snooze_label(void) {
+  static char buff[24];
+  if (s_timer_snooze_delay_ms <= 0) {
+    return "Off";
+  }
+  int h = (int)(s_timer_snooze_delay_ms / 3600000);
+  int m = (int)(s_timer_snooze_delay_ms % 3600000 / 60000);
+  int s = (int)(s_timer_snooze_delay_ms % 60000 / 1000);
+  if (h > 0) {
+    snprintf(buff, sizeof(buff), "%d:%02d:%02d", h, m, s);
+  } else if (m > 0) {
+    snprintf(buff, sizeof(buff), "%d:%02d", m, s);
+  } else {
+    snprintf(buff, sizeof(buff), "%d Sec", s);
+  }
+  return buff;
+}
+
 const char *settings_value(SettingId setting) {
   if (setting >= SettingCount) {
     // error handling
@@ -341,7 +362,7 @@ const char *settings_value(SettingId setting) {
   }
 #endif
   if (setting == SettingTimerSnoozeLength) {
-    return s_snooze_options[settings_get(SettingTimerSnoozeLength)];
+    return prv_snooze_label();
   }
   return s_setting_options[setting][settings_get(setting)];
 }
@@ -396,11 +417,18 @@ bool settings_timer_delete_immediately(void) {
 }
 
 bool settings_timer_snooze_enabled(void) {
-  return s_timer_snooze_option != SNOOZE_OPTION_OFF;
+  return s_timer_snooze_delay_ms > 0;
 }
 
 int64_t settings_timer_snooze_delay(void) {
-  return s_snooze_delays[s_timer_snooze_option];
+  return s_timer_snooze_delay_ms;
+}
+
+// The duration picker submits a dialled snooze delay; zero means Off
+void settings_timer_snooze_delay_set(int64_t delay_ms) {
+  // sanity bound is the largest dial the picker can produce, 23:59:59;
+  // anything past it reads as Off rather than a nonsense delay
+  s_timer_snooze_delay_ms = (delay_ms > 0 && delay_ms < 86400000) ? delay_ms : 0;
 }
 
 #ifdef PBL_COLOR
@@ -435,9 +463,9 @@ void settings_load(void) {
   if (persist_exists(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY)) {
     s_timer_delete_immediately = (persist_read_int(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY) != 0);
   }
-  if (persist_exists(TIMER_SNOOZE_PERSIST_KEY)) {
-    int saved = persist_read_int(TIMER_SNOOZE_PERSIST_KEY);
-    s_timer_snooze_option = (saved >= 0 && saved < SNOOZE_OPTIONS) ? (uint8_t)saved : 0;
+  if (persist_exists(TIMER_SNOOZE_MS_PERSIST_KEY)) {
+    int32_t saved = persist_read_int(TIMER_SNOOZE_MS_PERSIST_KEY);
+    s_timer_snooze_delay_ms = (saved >= 0 && saved < 86400000) ? saved : SNOOZE_DEFAULT_MS;
   }
 #ifdef PBL_COLOR
   if (persist_exists(TIMER_HIGHLIGHT_COLOR_PERSIST_KEY)) {
@@ -454,7 +482,7 @@ void settings_write(void) {
   persist_write_int(TIMER_WRAP_AROUND_PERSIST_KEY, s_list_wrap_around_enabled ? 1 : 0);
   persist_write_int(TIMER_START_MANUALLY_PERSIST_KEY, s_timer_start_automatically ? 0 : 1);
   persist_write_int(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY, s_timer_delete_immediately ? 1 : 0);
-  persist_write_int(TIMER_SNOOZE_PERSIST_KEY, s_timer_snooze_option);
+  persist_write_int(TIMER_SNOOZE_MS_PERSIST_KEY, (int32_t)s_timer_snooze_delay_ms);
 #ifdef PBL_COLOR
   persist_write_int(TIMER_HIGHLIGHT_COLOR_PERSIST_KEY, s_highlight_color.argb);
 #endif

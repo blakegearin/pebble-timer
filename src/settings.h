@@ -92,8 +92,9 @@ void    settings_set(SettingId setting, uint8_t option);
 /*
  * Function:    settings_option_count
  * ----------------------------------
- * how many options a setting offers: two for the On/Off and paired settings, the
- * six delays plus Off for Snooze Length, the whole palette for Accent Color. The
+ * how many options a setting offers: two for the On/Off and paired settings,
+ * the whole palette for Accent Color. Snooze Length is dialled on the
+ * duration picker rather than chosen from a list, so it never asks this. The
  * aplite row cycle and the option window both walk a setting's options through
  * here rather than assuming two.
  */
@@ -115,9 +116,10 @@ const char *settings_value(SettingId setting);
  * Function:    settings_option_labels / settings_option_swatches
  * -------------------------------------------------------------
  * the option list a setting offers, for the option window to draw: the labels
- * (the two of a paired setting, the six delays plus Off for Snooze Length, the
- * whole palette for Accent Color), and the swatches beside them -- NULL for
- * every setting but Accent Color. `settings_option_count` says how many labels.
+ * (the two of a paired setting, the whole palette for Accent Color), and the
+ * swatches beside them -- NULL for every setting but Accent Color, and NULL
+ * for Snooze Length too now that it is dialled on the picker instead
+ * of chosen from a list. `settings_option_count` says how many labels.
  */
 
 const char *const *settings_option_labels(SettingId setting);
@@ -155,6 +157,8 @@ bool settings_timer_start_automatically(void);
 bool settings_timer_delete_immediately(void);
 bool settings_timer_snooze_enabled(void);
 int64_t settings_timer_snooze_delay(void);
+// The picker dials the delay instead of the option list; zero is Off
+void settings_timer_snooze_delay_set(int64_t delay_ms);
 #ifdef PBL_COLOR
 GColor settings_colour(void);
 #endif

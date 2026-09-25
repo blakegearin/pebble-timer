@@ -61,6 +61,7 @@ struct DurationWindow {
   DurationWindowCallbacks callbacks;   //< callbacks
 
   CountdownTimer  *countdown_timer;   //< timer associated being set
+  bool            snooze_mode;        //< dialling a snooze delay, not a timer
   int32_t         field_values[3];    //< values of selection fields
   char            field_buffs[3][3];  //< buffers to draw field contents
   int8_t          field_selection;    //< index of selected field
@@ -82,6 +83,14 @@ static void update_sub_text(DurationWindow *duration_window) {
   int64_t duration = (int64_t)duration_window->field_values[0] * MSEC_IN_HR +
     (int64_t)duration_window->field_values[1] * MSEC_IN_MIN +
     (int64_t)duration_window->field_values[2] * MSEC_IN_SEC;
+  // in snooze mode there is no end time to preview and zero is a
+  // legal value -- it means Off -- so the sub text just names it
+  if (duration_window->snooze_mode) {
+    text_layer_set_text(duration_window->sub_text,
+      (duration < MSEC_IN_SEC) ? "Snooze Off" : "");
+    layer_set_hidden(text_layer_get_layer(duration_window->sub_text), false);
+    return;
+  }
   // check duration
   if (duration < TIMER_MINIMUM_DURATION) {
     text_layer_set_text(duration_window->sub_text, "");
@@ -217,7 +226,8 @@ static void prv_window_load(Window* window){
   GRect bounds = layer_get_frame(root);
   // main text
   duration_window->main_text = text_layer_create(GRect(0, bounds.size.h/7, bounds.size.w, 40));
-  text_layer_set_text(duration_window->main_text, "Set Timer");
+  text_layer_set_text(duration_window->main_text,
+    duration_window->snooze_mode ? "Snooze" : "Set Timer");
 #if defined(PBL_PLATFORM_EMERY) || defined(PBL_PLATFORM_GABBRO)
   text_layer_set_font(duration_window->main_text,
     fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD));
@@ -334,6 +344,7 @@ bool duration_window_get_topmost_window(DurationWindow *duration_window) {
  */
 
 void duration_window_set_timer(DurationWindow *duration_window, CountdownTimer *countdown_timer) {
+  duration_window->snooze_mode = false;  // every timer entry resets the mode
   duration_window->countdown_timer = countdown_timer;
   // set selection values if a timer was passed in
   int64_t duration = 0;
@@ -359,6 +370,37 @@ void duration_window_set_timer(DurationWindow *duration_window, CountdownTimer *
 
 CountdownTimer *duration_window_get_timer(DurationWindow *duration_window) {
   return duration_window->countdown_timer;
+}
+
+
+
+/*
+ * Switch the picker to Snooze mode and seed the fields with the current
+ * delay. The complete callback fires as before; main.c asks
+ * duration_window_get_snooze_mode to know which setting the value is for.
+ */
+
+void duration_window_set_snooze_mode(DurationWindow *duration_window, int64_t current) {
+  duration_window->snooze_mode = true;
+  duration_window->countdown_timer = NULL;
+  duration_window->field_values[0] = current / MSEC_IN_HR;
+  duration_window->field_values[1] = current % MSEC_IN_HR / MSEC_IN_MIN;
+  duration_window->field_values[2] = current % MSEC_IN_MIN / MSEC_IN_SEC;
+  // the title is set at window load; the sub text can live-update
+  if (duration_window->window) {
+    text_layer_set_text(duration_window->main_text, "Snooze");
+    update_sub_text(duration_window);
+  }
+}
+
+
+
+/*
+ * Gets whether the picker is dialling a snooze delay
+ */
+
+bool duration_window_get_snooze_mode(DurationWindow *duration_window) {
+  return duration_window->snooze_mode;
 }
 
 

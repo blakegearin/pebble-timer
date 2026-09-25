@@ -472,6 +472,27 @@ static void popup_window_stop_timer_callback(void *context) {
 
 static void duration_window_complete_callback(int64_t duration, void *context) {
   DurationWindow *duration_window = (DurationWindow*)context;
+
+  // The picker can also dial the Snooze Length delay. Zero is Off, so no
+  // minimum-duration check -- and nothing below this branch may assume
+  // a timer, because this path never touches the list.
+  if (duration_window_get_snooze_mode(duration_window)) {
+    settings_timer_snooze_delay_set(duration);
+    duration_window_pop(duration_window, false);
+#ifdef PBL_PLATFORM_APLITE
+    // aplite shows the settings as rows in the timer list
+    menu_window_refresh(s_menu_window);
+#else
+    // which settings window is underneath depends on where the setting was
+    // reached from, so mark all three dirty, like the option window's callback
+    settings_window_refresh(s_settings_window);
+    settings_window_refresh(s_list_window);
+    settings_window_refresh(s_timer_window);
+#endif
+    s_last_activity = countdown_timer_get_epoch_ms();
+    return;
+  }
+
   CountdownTimer *countdown_timer = duration_window_get_timer(duration_window);
   // check if long enough
   if (duration < TIMER_MIN_LENGTH) {
@@ -678,12 +699,19 @@ static const char *settings_value_callback(uint8_t setting, void *context) {
  * SettingsWindow clicked callback
  *
  * re-point the one option window at the clicked setting and open it. The labels,
- * their count and the colour swatches all come from settings.c, so the two
- * unusual settings -- Snooze Length's delay list and Accent Color's palette --
- * push exactly like a plain On/Off pair.
+ * their count and the colour swatches all come from settings.c, so the one
+ * unusual setting -- Accent Color's palette -- pushes exactly like a plain
+ * On/Off pair. Snooze Length is the exception: it dials its delay on the
+ * duration picker instead of opening an option list.
  */
 
 static void settings_window_clicked_callback(uint8_t setting, void *context) {
+  if ((SettingId)setting == SettingTimerSnoozeLength) {
+    // snooze dials on the duration picker, not the option list
+    duration_window_set_snooze_mode(s_duration_window, settings_timer_snooze_delay());
+    duration_window_push(s_duration_window, true);
+    return;
+  }
   s_option_window_setting = (SettingId)setting;
   option_window_push(s_option_window, settings_name((SettingId)setting),
     settings_option_labels((SettingId)setting), settings_option_count((SettingId)setting),
@@ -798,6 +826,13 @@ static void menu_window_click_callback(MenuRowKind kind, uint8_t row, void *cont
       // on aplite a settings row cycles its options in place, in one press
       const int16_t setting = menu_window_row_to_setting_index(s_menu_window, row);
       if (setting < 0) {
+        break;
+      }
+      if ((SettingId)setting == SettingTimerSnoozeLength) {
+        // snooze is dialled, not cycled -- the picker already exists on
+        // aplite, so this adds no window to the 24 KB budget
+        duration_window_set_snooze_mode(s_duration_window, settings_timer_snooze_delay());
+        duration_window_push(s_duration_window, true);
         break;
       }
       const uint8_t next = (settings_get((SettingId)setting) + 1) %
