@@ -20,10 +20,10 @@
 #   -n, --no-install      do not build or install this app; drive whatever is
 #                         already on screen. Use it to capture the firmware's
 #                         own UI (the system settings, say) for reference.
-#   -t, --time HH:MM:SS   pin the emulated clock before the scene runs (default
+#   -t, --time HH:MM:SS   pin the emulated clock after the app is up (default
 #                         10:09:00; pass "none" to leave the clock alone). The
-#                         emulator often ignores this, so --baseline diffs also
-#                         chop the top 20px status band before comparing.
+#                         status bar ticks by a minute across long scenes, so
+#                         --baseline diffs also chop the top 20px status band.
 #
 # Scene file: one command per line, '#' starts a comment.
 #
@@ -49,6 +49,43 @@ SETTLE=1.3        # seconds after a press before the display is worth capturing
 STATUS_BAND=20    # px of status bar ignored when diffing against a baseline
 
 die() { echo "error: $*" >&2; exit 1; }
+
+# pypkjs -- the phone-sim that delivers buttons and screenshots -- dies with
+# its websocket whenever the firmware panics, and a dead pypkjs turns every
+# later emu-button into "connection refused". Worse, the tool's own idea of
+# which emulators are alive can drift: zombies from a crashed run happily
+# share a flash file with the next one. So teardown kills by process table,
+# not by the tool's registry.
+kill_all_emus() {
+  pebble kill --force >/dev/null 2>&1 || true
+  pkill -f "m pypkjs" 2>/dev/null || true
+  pkill -x qemu-pebble 2>/dev/null || true
+  for _ in $(seq 40); do
+    pgrep -x qemu-pebble >/dev/null || pgrep -f "m pypkjs" >/dev/null || break
+    sleep 0.5
+  done
+  pkill -9 -x qemu-pebble 2>/dev/null || true
+  pkill -9 -f "m pypkjs" 2>/dev/null || true
+}
+
+# Run an emu command quietly, but print the tool's complaint if it fails:
+# bare set -e used to exit the script mid-scene without a word. Redirect to
+# files, never command substitution -- `pebble install` daemonises pypkjs as
+# its child, and an inherited broken pipe kills pypkjs the moment it next
+# writes anything. EMU_RETRIES retries the command with a wait between tries
+# (a firmware still formatting a wiped flash refuses the first install).
+try_emu() {
+  local tries=${EMU_RETRIES:-1} n=0
+  until emu "$@" >"$TMPDIR_/emu.out" 2>"$TMPDIR_/emu.err"; do
+    n=$((n+1))
+    if [[ $n -ge $tries ]]; then
+      printf 'error: pebble %s --emulator %s failed\n' "$*" "$PLATFORM" >&2
+      tail -3 "$TMPDIR_/emu.err" "$TMPDIR_/emu.out" 2>/dev/null | grep . | sed 's/^/  /' >&2
+      exit 1
+    fi
+    sleep 10
+  done
+}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -76,20 +113,30 @@ OUT="${OUT:-tmp/shots/$SCENE_NAME/$PLATFORM}"
 mkdir -p "$OUT"
 rm -f "$OUT"/*.png
 
+TMPDIR_="$(mktemp -d)"
+# Cleanup in the trap, not at the foot of the script: a run that dies
+# mid-scene used to leave its qemu and pypkjs alive to fight the next run's
+# freshly-booted stack over one flash file.
+cleanup() {
+  rm -rf "$TMPDIR_"
+  [[ $KEEP -eq 1 ]] || kill_all_emus
+}
+trap cleanup EXIT
+
 emu() { pebble "$@" --emulator "$PLATFORM"; }
 
 if [[ $WIPE -eq 1 ]]; then
   # `pebble wipe` leaves the emulated flash alone, and that flash is where the
   # app's persisted timers and settings live -- so drop it and let the emulator
-  # re-create a pristine one on the next launch.
+  # re-create a pristine one on the next launch. A live qemu writes the flash
+  # back on exit, hence the kill-and-wait first: racing it produced a
+  # half-written flash, a firmware panic mid-scene, and "Install an app to
+  # continue" where a shot should be.
   echo "wiping $PLATFORM emulator data"
-  # `pebble kill` takes no --emulator flag: it stops every running emulator, and
-  # it has to stop this one before the flash file can be replaced, because a
-  # live qemu writes it back on exit.
-  pebble kill --force >/dev/null 2>&1 || true
-  sleep 2
+  kill_all_emus
   SDK_DATA="${HOME}/Library/Application Support/Pebble SDK"
   rm -f "$SDK_DATA"/*/"$PLATFORM"/qemu_spi_flash.bin 2>/dev/null || true
+  rm -f "$SDK_DATA"/*/"$PLATFORM"/timeline.db 2>/dev/null || true
   rm -rf "$SDK_DATA"/*/"$PLATFORM"/localstorage 2>/dev/null || true
   rm -rf "$SDK_DATA"/*/"$PLATFORM"/app_cache 2>/dev/null || true
 fi
@@ -101,24 +148,46 @@ fi
 
 # Attach the log stream *before* installing, so APP_LOG output from the app's
 # own startup (heap numbers, errors) lands in the file too. `pebble logs` boots
-# the emulator if it is not already up.
-( emu logs > "$OUT/logs.txt" 2>&1 & )
-sleep "${BOOT_WAIT:-15}"
-if [[ "$FIXED_TIME" != "none" ]]; then
-  # A ticking status bar makes every shot differ from every baseline, so freeze
-  # it. Timer rows still count down: scenes meant for --baseline should avoid
-  # running timers, or expect a handful of pixels of drift in those cells.
-  emu emu-set-time "$FIXED_TIME" >/dev/null 2>&1 || true
-fi
+# the emulator if it is not already up. PYTHONUNBUFFERED because the stream is
+# polled for the app's startup marker below, and python block-buffers stdout
+# into a file -- without it, the marker would only appear when the stream dies.
+( PYTHONUNBUFFERED=1 emu logs > "$OUT/logs.txt" 2>&1 & )
+# Wait for that boot to give us a qemu -- and wait *passively*. Probing with
+# ping or screenshot is a trap: when those commands find no live device they
+# boot one themselves, and two emulators sharing one flash file is exactly
+# the corruption this section exists to avoid.
+for _ in $(seq 30); do
+  pgrep -f "qemu-pebble.*/$PLATFORM/" >/dev/null && break
+  sleep 1
+done
+pgrep -f "qemu-pebble.*/$PLATFORM/" >/dev/null \
+  || die "pebble logs did not boot a $PLATFORM emulator"
+sleep "${BOOT_WAIT:-10}"   # first boot off a wiped flash formats it slowly
 
 if [[ $NO_INSTALL -eq 0 ]]; then
   echo "installing on $PLATFORM"
-  emu install >/dev/null 2>&1
-  sleep 4
+  EMU_RETRIES=3 try_emu install
+  # The app's JS says "JS ready!" exactly once per launch, and the log stream
+  # catches it. That -- not a guessed sleep -- is the moment the app owns the
+  # screen and the buttons are aimed at it. Presses flung into a still-booting
+  # app used to queue up and fire as a flood, landing the scene anywhere.
+  for _ in $(seq 60); do
+    grep -q "JS ready" "$OUT/logs.txt" 2>/dev/null && break
+    sleep 1
+  done
+  grep -q "JS ready" "$OUT/logs.txt" 2>/dev/null \
+    || { echo "warning: no startup marker in $OUT/logs.txt within 60s" >&2; sleep 5; }
 fi
+sleep "$SETTLE"
 
-TMPDIR_="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR_"' EXIT
+if [[ "$FIXED_TIME" != "none" ]]; then
+  # Freeze the status bar clock after the firmware is answering commands --
+  # sent into a still-booting emulator it is silently dropped. This is only a
+  # head start: pypkjs re-syncs the firmware to the phone's wall clock within
+  # half a minute, so the shot handler below re-pins before every capture.
+  emu emu-set-time "$FIXED_TIME" >/dev/null 2>&1 \
+    || echo "warning: could not pin the clock to $FIXED_TIME" >&2
+fi
 
 step=0
 drift=0
@@ -133,15 +202,15 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     press)
       count="${rest#* }"; [[ "$count" == "$rest" ]] && count=1
       for ((i=0; i<count; i++)); do
-        emu emu-button click "$arg" >/dev/null 2>&1
+        try_emu emu-button click "$arg"
         sleep "$SETTLE"
       done
       ;;
     hold)
       ms="${rest#* }"; [[ "$ms" == "$rest" ]] && ms=1000
-      emu emu-button push "$arg" >/dev/null 2>&1
+      try_emu emu-button push "$arg"
       sleep "$(echo "$ms" | awk '{print $1/1000}')"
-      emu emu-button release "$arg" >/dev/null 2>&1
+      try_emu emu-button release "$arg"
       sleep "$SETTLE"
       ;;
     wait) sleep "$arg" ;;
@@ -149,7 +218,16 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     shot)
       step=$((step+1))
       name="$(printf '%02d-%s' "$step" "$arg")"
-      emu screenshot "$OUT/$name.png" --no-open >/dev/null 2>&1
+      # Re-pin the clock right before capture. pypkjs re-syncs the firmware to
+      # the phone's wall clock within ~30s of any set, so the boot-time pin
+      # goes stale mid-scene; a pin taken a second before the frame is fresh.
+      # Twice, because a pin that races the re-sync is accepted and discarded.
+      if [[ "$FIXED_TIME" != "none" ]]; then
+        emu emu-set-time "$FIXED_TIME" >/dev/null 2>&1 || true
+        sleep 0.5
+        emu emu-set-time "$FIXED_TIME" >/dev/null 2>&1 || true
+      fi
+      try_emu screenshot "$OUT/$name.png" --no-open
       echo "  shot $name"
       if [[ -n "$BASELINE" && -f "$BASELINE/$name.png" && $HAVE_MAGICK -eq 1 ]]; then
         # The top band is the firmware's status bar -- its clock is not our UI
@@ -176,8 +254,6 @@ if [[ $HAVE_MAGICK -eq 1 ]]; then
   magick $(ls "$OUT"/*.png | grep -v '\.diff\.png$' | sort) +append \
     -bordercolor gray -border 2 "$OUT/contact-sheet.png" 2>/dev/null || true
 fi
-
-[[ $KEEP -eq 1 ]] || pebble kill --force >/dev/null 2>&1 || true
 
 echo "wrote $step shots to $OUT"
 if [[ -n "$BASELINE" ]]; then

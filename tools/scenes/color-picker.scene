@@ -12,6 +12,7 @@
 # with -o pointed at the assets. Run after readme-tour.scene.
 
 note a colour platform opens straight to the duration picker; make a timer
+wait 4              # the app's first window needs to be up before presses land
 press select        # off hours
 press up 25         # twenty-five minutes
 press select        # off minutes

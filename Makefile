@@ -1,7 +1,8 @@
-# Repo chores: the pebble tool's common flows, and the screenshot harness
-# (whose work lives in tools/screenshots.sh -- this is the loop a human would
-# mistype: which scene belongs to which platform, where the README shots
-# live, and that the tour starts from a wiped state).
+# Repo chores: the pebble tool's common flows, and the screenshot harness.
+# The harness itself lives in tools/shots.sh (per-platform scenes) and
+# tools/screenshots.sh (one scene, one platform) -- which platform gets which
+# scene, and why the colour picker copies into the assets instead of writing
+# them, are facts for bash to know, not make.
 #
 ## Targets
 ##   make build               compile all six platforms into build/
@@ -11,21 +12,8 @@
 ##   make shots               refresh assets/screenshots/ for every platform
 ##   make shot-<platform>     ...for one platform (e.g. make shot-chalk)
 ##   make check               diff the empty menu against the upstream baselines
-##
-## aplite has no cog row -- its settings are inline rows -- so its tour is a
-## separate scene with three shots rather than four. The Accent Color setting
-## is a third scene, run on the four colour platforms only: aplite has no
-## settings windows and diorite is black and white, so it exists on neither.
 PLATFORMS := aplite basalt chalk diorite emery gabbro
-COLOUR    := basalt chalk emery gabbro
-BASELINED := aplite basalt chalk
-ASSETS    := assets/screenshots
-BASEDIR   := tmp/baselines/upstream-master
-TOUR      := tools/scenes/readme-tour.scene
-TOUR_BW   := tools/scenes/readme-aplite.scene
-COLOR     := tools/scenes/color-picker.scene
-EMPTY     := tools/scenes/menu-empty.scene
-SHOTS     := tools/screenshots.sh
+SHOTSET   := tools/shots.sh
 
 PLAT ?= basalt
 
@@ -56,23 +44,14 @@ kill:
 clean:
 	rm -rf build
 
-shots: $(PLATFORMS:%=shot-%)
+shots:
+	$(SHOTSET)
 
 # An explicit list, not a shot-% pattern rule: macOS ships GNU make 3.81,
 # which silently skips pattern rules once .PHONY has created empty entries
 # for the same names.
 $(PLATFORMS:%=shot-%):
-	@plat=$(@:shot-%=%); \
-	scene=$(TOUR); \
-	[ "$$plat" = aplite ] && scene=$(TOUR_BW); \
-	$(SHOTS) -p $$plat -w -o $(ASSETS)/$$plat $$scene; \
-	case " $(COLOUR) " in *" $$plat "*) \
-		$(SHOTS) -p $$plat -w $(COLOR); \
-		cp tmp/shots/color-picker/$$plat/*-color-*.png $(ASSETS)/$$plat/;; \
-	esac
+	$(SHOTSET) -p $(@:shot-%=%)
 
 check:
-	@for plat in $(BASELINED); do \
-		$(SHOTS) -p $$plat -w -b $(BASEDIR)/$$plat \
-			-o tmp/shots/check/$$plat $(EMPTY) || exit 1; \
-	done
+	$(SHOTSET) check
