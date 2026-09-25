@@ -68,7 +68,7 @@ struct DetailWindow {
 
   bool        delete_armed;               //< whether delete needs confirmation
   AppTimer   *delete_arm_timer;           //< timer to clear confirmation state
-  bool        delete_immediately;         //< whether the Delete setting skips arming
+  bool        delete_immediately;         //< Confirm Deletion: Off, so skip arming
 };
 
 /*******************************************************************************
@@ -220,7 +220,7 @@ static void down_click_handler(ClickRecognizerRef recognizer, void *context) {
   }
 
   if (detail_window->delete_immediately) {
-    // Delete: Immediately. DOWN is a straight delete on the first press, and
+    // Confirm Deletion: Off. DOWN is a straight delete on the first press, and
     // the "Timer Deleted" popup still shows -- it is feedback, not a guard.
     return detail_window->callbacks.delete_timer(detail_window->countdown_timer, context);
   }
@@ -509,8 +509,9 @@ void detail_window_set_highlight_color(DetailWindow *detail_window,
 /*
  * set whether DOWN deletes on the first press
  *
- * this is the Delete setting's arming behaviour, owned here and stored there:
- * main.c calls this wherever the setting changes and wherever the window is
+ * this is the Confirm Deletion setting's arming behaviour, owned here and stored
+ * there: main.c calls this wherever the setting changes and wherever the window
+ * is
  * pushed. when immediately is false, behaviour is exactly 3d4774f's armed
  * action bar.
  */

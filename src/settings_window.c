@@ -2,12 +2,13 @@
  * FILENAME :        settings_window.c
  *
  * DESCRIPTION :
- *      Create, destroy, and manage a SettingsWindow to list the app's
- *      settings, each drawn as a name-over-value cell.
+ *      Create, destroy, and manage a SettingsWindow to list settings, each
+ *      drawn as a name-over-value cell.
  *
  * PUBLIC FUNCTIONS :
  *      SettingsWindow  *settings_window_create(SettingsWindowCallbacks
- *                          settings_window_callbacks);
+ *                          settings_window_callbacks, const char *title,
+ *                          const uint8_t *row_ids, uint8_t num_rows);
  *      void            settings_window_destroy(SettingsWindow
  *                          *settings_window);
  *      void            settings_window_push(SettingsWindow
@@ -17,13 +18,12 @@
  *      void            settings_window_set_highlight_color(SettingsWindow
  *                          *settings_window, GColor color);
  *
- * AUTHOR :     Blake Gearin        START DATE :    24/09/26
+ * AUTHOR :     Blake Gearin        START DATE :    2026-09-24
  *
  */
 
 #include <pebble.h>
 #include "settings_window.h"
-#include "settings.h"
 
 /*
  * The whole window is excluded on aplite rather than deleted from the build:
@@ -54,6 +54,9 @@ struct SettingsWindow {
   MenuLayer   *menu;      //< menu layer displaying the settings
   StatusBarLayer *status; //< status bar
   SettingsWindowCallbacks callbacks; //< settings list callbacks
+  const char  *title;     //< this window's own name, drawn as a header on rect
+  const uint8_t *row_ids; //< which row each list row stands for, owned by the caller
+  uint8_t      num_rows;  //< how many row ids there are
   GColor      highlight_color;       //< main color for highlights
 };
 
@@ -75,12 +78,13 @@ static uint16_t settings_get_num_sections_callback(MenuLayer *menu_layer, void *
 
 
 /*
- * get number of rows for menu layer, one per setting
+ * get number of rows for menu layer, one per row id the caller was given
  */
 
 static uint16_t settings_get_num_rows_callback(MenuLayer *menu_layer, uint16_t section_index,
                                                void *context) {
-  return SettingCount;
+  SettingsWindow *settings_window = (SettingsWindow*)context;
+  return settings_window->num_rows;
 }
 
 
@@ -102,7 +106,8 @@ static int16_t settings_get_header_height_callback(MenuLayer *menu_layer, uint16
 
 static void settings_draw_header_callback(GContext *ctx, const Layer *cell_layer,
                                           uint16_t section_index, void *context) {
-  menu_cell_basic_header_draw(ctx, cell_layer, "Settings");
+  SettingsWindow *settings_window = (SettingsWindow*)context;
+  menu_cell_basic_header_draw(ctx, cell_layer, settings_window->title);
 }
 
 
@@ -112,15 +117,17 @@ static void settings_draw_header_callback(GContext *ctx, const Layer *cell_layer
  *
  * menu_cell_basic_draw resolves the fonts from the theme, which is why there
  * is no font handling here -- hardcoding one would break emery and gabbro.
+ * A NULL value leaves the name alone on the cell, which is what a group row
+ * wants: it is navigation, and it has nothing to report.
  */
 
 static void settings_draw_row_callback(GContext *ctx, const Layer *cell_layer,
                                        MenuIndex *cell_index, void *context) {
   SettingsWindow *settings_window = (SettingsWindow*)context;
-  const uint8_t setting = (uint8_t)cell_index->row;
+  const uint8_t row_id = settings_window->row_ids[cell_index->row];
   menu_cell_basic_draw(ctx, cell_layer,
-    settings_window->callbacks.get_name(setting, context),
-    settings_window->callbacks.get_value(setting, context), NULL);
+    settings_window->callbacks.get_name(row_id, context),
+    settings_window->callbacks.get_value(row_id, context), NULL);
 }
 
 
@@ -132,7 +139,7 @@ static void settings_draw_row_callback(GContext *ctx, const Layer *cell_layer,
 static void settings_select_callback(MenuLayer *menu_layer, MenuIndex *cell_index,
                                      void *context) {
   SettingsWindow *settings_window = (SettingsWindow*)context;
-  settings_window->callbacks.clicked((uint8_t)cell_index->row, context);
+  settings_window->callbacks.clicked(settings_window->row_ids[cell_index->row], context);
 }
 
 
@@ -212,7 +219,9 @@ static void settings_window_unload(Window *window) {
  * the window itself is created now, its layers only while it is on screen
  */
 
-SettingsWindow *settings_window_create(SettingsWindowCallbacks settings_window_callbacks) {
+SettingsWindow *settings_window_create(SettingsWindowCallbacks settings_window_callbacks,
+                                       const char *title, const uint8_t *row_ids,
+                                       uint8_t num_rows) {
   SettingsWindow *settings_window = (SettingsWindow*)malloc(sizeof(SettingsWindow));
   if (settings_window == NULL) {
     // error handling
@@ -220,6 +229,9 @@ SettingsWindow *settings_window_create(SettingsWindowCallbacks settings_window_c
     return NULL;
   }
   settings_window->callbacks = settings_window_callbacks;
+  settings_window->title = title;
+  settings_window->row_ids = row_ids;
+  settings_window->num_rows = num_rows;
   settings_window->menu = NULL;
   settings_window->status = NULL;
   settings_window->highlight_color = GColorBlack;

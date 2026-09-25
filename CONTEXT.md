@@ -23,23 +23,33 @@ with `settings_window`. Do not reintroduce the collision.
 ## Terms
 
 - **Duration** -- the length dialled in on the duration picker.
-- **Setting** -- one of the app's preferences (`Sort Order`, `Group`, `Start
-  Timers`, `Delete`, `Snooze`, and -- on the colour platforms only -- `Accent
-  Color`). Named by `SettingId` in `settings.h`.
+- **Setting** -- one of the app's preferences: `Sort Order`, `Group`, `Wrap
+  Around`, `Start Mode`, `Confirm Deletion`, `Snooze Length`, and -- on the
+  colour platforms only -- `Accent Color`. Named by `SettingId` in `settings.h`,
+  which prefixes the names with the group each belongs to.
+- **Group** (of settings) -- `List` (how the timer list behaves: `Sort Order`,
+  `Group`, `Wrap Around`) and `Timer` (how a timer behaves: `Start Mode`,
+  `Confirm Deletion`, `Snooze Length`). On aplite the groups have no UI, so the
+  six are flat inline rows; everywhere else each is a sub-menu off the settings
+  list. Beware: `Group` is also the *name of a setting* (the running/paused
+  grouping), and `SettingListGroup` is the setting while the group rows are
+  `SETTINGS_ROW_GROUP_*`.
 - **Option** -- one choice within one setting (`Recency` / `Duration`).
-  Every setting has two options except `Snooze`, whose options are the six
-  delays plus `Off` in `s_snooze_options` in `main.c`, and `Accent Color`,
+  Every setting has two options except `Snooze Length`, whose options are the
+  six delays plus `Off` in `s_snooze_options` in `main.c`, and `Accent Color`,
   whose options are the sixty-four palette swatches in `s_color_values` in
-  `main.c`.
+  `main.c`. An On/Off pair is listed `Off, On`; the shipped default is wherever
+  the false static lands, which for `Confirm Deletion` is index 1.
 - **Armed delete** -- the in-place confirm state on the detail window's action
-  bar, not a separate confirmation screen.
+  bar, not a separate confirmation screen. It is what `Confirm Deletion: On`
+  gives you, and `Off` takes away.
 
 ## Storage index vs. view index
 
 `s_countdown_timers[]` is **always** in recency order: most recently used
-first, with running timers above paused -- that grouping is the `Group`
-setting, `Running First` by default, and `Off` makes the order purely by last
-use.
+first, with running timers above paused -- that grouping is the `Group` setting
+(`SettingListGroup`), `Running First` by default, and `Off` makes the order purely
+by last use.
 `s_timer_view_indices[]` lays the selected sort over the top without
 disturbing it.
 
@@ -53,6 +63,8 @@ Six targets: `aplite` (Pebble/Pebble Steel), `basalt` (Time/Time Steel),
 the old "2 Duo / Core 2 Duo" label was wrong).
 
 The one line that matters: **aplite is the 24 KB platform, where compiled code
-lives in the same budget as data.** Adding a window there costs RAM even if it
-is never pushed. That is why the settings UI is inline rows on aplite and two
-sub-windows everywhere else.
+lives in the same budget as data.** Adding a window *type* there costs RAM even
+if it is never pushed -- though an extra instance of a type already compiled in
+costs only a struct and a `Window`, not more code. That is why the settings UI
+is inline rows on aplite and a sub-menu tree (the `List` and `Timer` groups) on
+every other platform, all of it drawn by the one `SettingsWindow` type.

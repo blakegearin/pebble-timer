@@ -22,6 +22,8 @@
  *                      uint8_t row);
  *      int16_t     menu_window_row_to_setting_index(MenuWindow *menu_window,
  *                      uint8_t row);
+ *      void        menu_window_set_wrap_around(MenuWindow *menu_window,
+ *                      bool wrap_around);
  *      void        menu_window_set_highlight_color(MenuWindow *menu_window,
  *                      GColor color);
  *
@@ -47,6 +49,10 @@
 #define MENU_CELL_TEXT_Y_BUFF_RATIO 0.2
 #define MENU_LAYER_DEFAULT_CELL_HEIGHT 52
 #define MENU_LAYER_SELECTED_CELL_HEIGHT 65
+// Hold-to-repeat on the two scrolling buttons, at the rate the duration picker's
+// selection layer already uses: this list can be fifteen rows long on aplite, so
+// holding a button down is the normal way to travel it.
+#define MENU_BUTTON_REPEAT_MS 100
 
 
 
@@ -68,6 +74,7 @@ struct MenuWindow {
                                           //< no copy a draw callback can reach
   StatusBarLayer      *status;            //< status bar for Basalt
   MenuWindowCallbacks callbacks;          //< menu layer callbacks
+  bool wrap_around;                       //< whether the ends of the list wrap
 };
 
 
@@ -280,13 +287,77 @@ static void menu_draw_row_callback(GContext* ctx, const Layer *cell_layer, MenuI
 
 
 /*
- * menu layer clicked callback
+ * move the cursor by "offset" rows
+ *
+ * Wrap Around decides what a step past either end means: the other end, or
+ * nothing. Without it the cursor stops at the ends, which is exactly what the
+ * MenuLayer's own click config would have done -- the one thing it cannot do is
+ * step over them, and that is why this window walks its list by hand now.
  */
 
-static void menu_select_callback(MenuLayer *menu_layer, MenuIndex *cell_index, void *context) {
+static void menu_move_selection(MenuWindow *menu_window, int16_t offset) {
+  const uint16_t count = menu_get_row_count(menu_window);
+  if (count == 0) {
+    return;
+  }
+  MenuIndex selected = menu_layer_get_selected_index(menu_window->menu);
+  int16_t target = (int16_t)selected.row + offset;
+  if (menu_window->wrap_around) {
+    // a held button can overshoot by more than the list is long, so fold it
+    // rather than assuming one step. the ends meet: a full loop lands back
+    // where it started.
+    target %= (int16_t)count;
+    if (target < 0) {
+      target += (int16_t)count;
+    }
+  } else if (target < 0) {
+    target = 0;
+  } else if (target >= (int16_t)count) {
+    target = (int16_t)count - 1;
+  }
+  if (target == (int16_t)selected.row) {
+    return;
+  }
+  menu_layer_set_selected_index(menu_window->menu,
+                                (MenuIndex) { .section = 0, .row = (uint16_t)target },
+                                MenuRowAlignCenter, true);
+}
+
+
+
+static void menu_up_click_handler(ClickRecognizerRef recognizer, void *context) {
+  menu_move_selection((MenuWindow*)context, -1);
+}
+
+static void menu_down_click_handler(ClickRecognizerRef recognizer, void *context) {
+  menu_move_selection((MenuWindow*)context, 1);
+}
+
+/*
+ * the row the cursor is on is the row a click acts on. this is the callback the
+ * MenuLayer's own config used to make: given the selected index, tell main.c
+ * what kind of row it landed on.
+ */
+
+static void menu_select_click_handler(ClickRecognizerRef recognizer, void *context) {
   MenuWindow *menu_window = (MenuWindow*)context;
-  menu_window->callbacks.clicked(menu_window_row_kind(menu_window, cell_index->row),
-    cell_index->row, context);
+  const uint8_t row = (uint8_t)menu_layer_get_selected_index(menu_window->menu).row;
+  menu_window->callbacks.clicked(menu_window_row_kind(menu_window, row), row, menu_window);
+}
+
+/*
+ * UP and DOWN walk the list, repeating while held so the fifteen rows an aplite
+ * list can hold are one press-and-hold away from either end; SELECT acts on the
+ * row the cursor is on; BACK is left unclaimed, which is how a window keeps the
+ * firmware's own pop-or-quit handling of it.
+ */
+
+static void menu_click_config_provider(void *context) {
+  window_single_repeating_click_subscribe(BUTTON_ID_UP, MENU_BUTTON_REPEAT_MS,
+                                          menu_up_click_handler);
+  window_single_repeating_click_subscribe(BUTTON_ID_DOWN, MENU_BUTTON_REPEAT_MS,
+                                          menu_down_click_handler);
+  window_single_click_subscribe(BUTTON_ID_SELECT, menu_select_click_handler);
 }
 
 
@@ -299,6 +370,7 @@ static MenuWindow *menu_window_init(MenuWindow *menu_window,
                                     MenuWindowCallbacks menu_window_callbacks, bool animated) {
   // load resources
   menu_window->highlight_color = GColorBlack;
+  menu_window->wrap_around = false;
   menu_window->settings_icon = NULL;
   menu_window->play_icon = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_PLAY_TRANS_WHITE);
   menu_window->pause_icon = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_PAUSE_TRANS_WHITE);
@@ -332,12 +404,14 @@ static MenuWindow *menu_window_init(MenuWindow *menu_window,
       .get_num_sections = menu_get_num_sections_callback,
       .get_num_rows = menu_get_num_rows_callback,
       .draw_row = menu_draw_row_callback,
-      .select_click = menu_select_callback,
 #ifdef PBL_ROUND
       .get_cell_height = menu_get_row_height_callback,
 #endif
     });
-    menu_layer_set_click_config_onto_window(menu_window->menu, menu_window->window);
+    // not menu_layer_set_click_config_onto_window: its cursor stops at the ends
+    // of the list, and Wrap Around is about those ends. see the provider above.
+    window_set_click_config_provider_with_context(menu_window->window,
+                                                 menu_click_config_provider, menu_window);
     layer_add_child(root, menu_layer_get_layer(menu_window->menu));
     // create status bar
     menu_window->status = status_bar_layer_create();
@@ -515,4 +589,14 @@ int16_t menu_window_row_to_setting_index(MenuWindow *menu_window, uint8_t row) {
 void menu_window_set_highlight_color(MenuWindow *menu_window, GColor color) {
   menu_window->highlight_color = color;
   menu_layer_set_highlight_colors(menu_window->menu, color, gcolor_legible_over(color));
+}
+
+
+
+/*
+ * turn Wrap Around on or off for this window's cursor
+ */
+
+void menu_window_set_wrap_around(MenuWindow *menu_window, bool wrap_around) {
+  menu_window->wrap_around = wrap_around;
 }

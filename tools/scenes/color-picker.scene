@@ -20,7 +20,7 @@ press select        # confirm -- detail opens
 press back          # menu, cursor on the timer row
 press down          # to the cog row
 press select        # Settings
-press down 5        # to the Accent Color row, the last of the settings
+press down 2        # past the two group rows to Accent Color, the last row
 press select        # the colour picker, opening on Malachite
 shot color-picker
 press down 3        # to Dark Candy Apple Red, far end of the reds

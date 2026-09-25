@@ -22,7 +22,7 @@
  *              window per setting. Not compiled on aplite, which flips its
  *              settings inline; see .c for the guard.
  *
- * AUTHOR :     Blake Gearin        START DATE :    24/09/26
+ * AUTHOR :     Blake Gearin        START DATE :    2026-09-24
  *
  */
 

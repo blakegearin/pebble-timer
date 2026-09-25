@@ -5,10 +5,9 @@ A countdown timer for Pebble smartwatches, forked from Pebble's `pebble-timer` a
 ## Features
 
 - Choose your own accent color
-- Sort timers by duration or creation
+- Configure list sorting, grouping, and wrapping
 - Pause or start a timer on create
 - Extra confirmation to avoid accidental deletions
-- Disable grouping active timers at the top of the list
 - Customize snooze duration
 - Mix and match settings
 

@@ -34,6 +34,7 @@
 #define TIMER_DELETE_IMMEDIATELY_PERSIST_KEY 68013925
 #define TIMER_HIGHLIGHT_COLOR_PERSIST_KEY 19283746
 #define TIMER_SNOOZE_PERSIST_KEY 37492058
+#define TIMER_WRAP_AROUND_PERSIST_KEY 64718293
 #define PERSIST_VERSION 1
 #define PERSIST_VERSION_KEY 46134672
 #define COUNTDOWN_TIMERS_MAX 8
@@ -60,18 +61,25 @@ static DurationWindow *s_duration_window = NULL;
 static PopupWindow *s_popup_window = NULL;
 #ifndef PBL_PLATFORM_APLITE
 // aplite renders the settings as inline rows in the timer list instead of
-// these two windows, and cannot afford either one's .text
+// these windows, and cannot afford their .text
 static SettingsWindow *s_settings_window = NULL;
+// the two groups' own sub-menus. the same window type as the settings list above,
+// each pointed at a different set of rows -- which is what makes a sub-menu here
+// cost a struct and a Window rather than another screenful of code.
+static SettingsWindow *s_list_window = NULL;
+static SettingsWindow *s_timer_window = NULL;
 static OptionWindow *s_option_window = NULL;
 // which setting s_option_window is currently pointed at, so the select
 // callback knows what it just changed
-static SettingId s_option_window_setting = SettingSortOrder;
+static SettingId s_option_window_setting = SettingListSortOrder;
 #endif
 static uint8_t s_countdown_timers_count = 0;
 static CountdownTimer *s_countdown_timers[COUNTDOWN_TIMERS_MAX] = {};
 static uint8_t s_timer_view_indices[COUNTDOWN_TIMERS_MAX] = {};
-static bool s_timer_sort_by_last_used = false;
-static bool s_grouping_disabled = false;
+static bool s_list_sort_by_last_used = false;
+static bool s_list_grouping_disabled = false;
+// whether a step past either end of the timer list lands on the other end
+static bool s_list_wrap_around_enabled = false;
 // naming rule: every setting's bool is named so that false is the shipped
 // default. statics zero-initialise and an absent persist key leaves them
 // untouched, so "no key yet" means "the shipped default" with no default table
@@ -79,12 +87,12 @@ static bool s_grouping_disabled = false;
 // names the variables, not the on-flash ints: a stored value still means what
 // 1.2.6 stored, so the two settings this fork re-defaults are inverted at the
 // load/store boundary.
-static bool s_start_timers_automatically = false;
-static bool s_delete_immediately = false;
-// the Snooze setting is not a bool, so the rule above cannot name its default
-// either; index 0 is the shipped one ("1 Minute") and an absent persist key
-// leaves this initialiser untouched, exactly like the accent colour's
-static uint8_t s_snooze_option = 0;
+static bool s_timer_start_automatically = false;
+static bool s_timer_delete_immediately = false;
+// the Snooze Length setting is not a bool, so the rule above cannot name its
+// default either; index 0 is the shipped one ("1 Minute") and an absent persist
+// key leaves this initialiser untouched, exactly like the accent colour's
+static uint8_t s_timer_snooze_option = 0;
 #ifdef PBL_COLOR
 // the app's accent colour. not a bool, so the false-is-default rule above
 // cannot name it; the job is done here instead -- this initialiser is the
@@ -98,14 +106,18 @@ static int64_t s_last_activity = 0;
 /*
  * the copy, one home for all the settings strings
  *
- * option index 0 is always the shipped default, which is what a zero value
- * means. this is an enum and a string table, not the data-driven descriptor
- * table the spec rejected -- it generates no UI. it exists because aplite
- * renders the same settings as rows in the timer list while the other
- * platforms render them in the settings window: two renderers, one copy.
+ * the shipped default is wherever the false static lands, per settings.h, and it
+ * is the accessors -- not the table position -- that map a bool to its index.
+ * On/Off pairs are listed `Off, On` so they read alike, which is why Confirm
+ * Deletion's default (`On`) is the second entry. this is an enum and a string
+ * table, not the data-driven descriptor table the spec rejected -- it generates no
+ * UI. it exists because aplite renders the same settings as rows in the timer list
+ * while the other platforms render them in the settings window: two renderers,
+ * one copy.
  */
 static const char *const s_setting_names[SettingCount] = {
-  "Sort Order", "Group", "Start Timers", "Delete", "Snooze",
+  "Sort Order", "Group", "Wrap Around", "Start Mode", "Confirm Deletion",
+  "Snooze Length",
 #ifdef PBL_COLOR
   "Accent Color",
 #endif
@@ -113,16 +125,17 @@ static const char *const s_setting_names[SettingCount] = {
 static const char *const s_setting_options[SettingCount][2] = {
   { "Duration",      "Recency"       },
   { "Running First", "Off"           },
+  { "Off",           "On"            },
   { "Manually",      "Automatically" },
-  { "Confirm First", "Immediately"   },
-  { NULL, NULL },  // Snooze's options are the delay list below, not this table
+  { "Off",           "On"            },  // On = confirm first, the shipped default
+  { NULL, NULL },  // Snooze Length's options are the delay list below, not this table
 #ifdef PBL_COLOR
   { NULL, NULL },  // Accent Color's options are the palette below, not this table
 #endif
 };
 
 /*
- * the Snooze setting's options: how long the alarm waits before going off
+ * the Snooze Length setting's options: how long the alarm waits before going off
  * again when the snooze button is pressed. index 0 is the shipped default
  * per the rule in settings.h, and Off sits last as its own sentinel: delay 0
  * means the popup shows no snooze icon at all.
@@ -226,7 +239,7 @@ static uint16_t prv_get_next_refresh_delay(void) {
 static bool prv_timer_precedes(CountdownTimer *a, CountdownTimer *b) {
   bool a_running = !countdown_timer_get_paused(a);
   bool b_running = !countdown_timer_get_paused(b);
-  if (!s_grouping_disabled && a_running != b_running) {
+  if (!s_list_grouping_disabled && a_running != b_running) {
     return a_running;
   }
   return countdown_timer_get_last_update(a) > countdown_timer_get_last_update(b);
@@ -286,7 +299,7 @@ static void prv_sort_timers(CountdownTimer **timers, uint8_t count, TimerPrecede
  */
 
 static void prv_rebuild_timer_view_indices(void) {
-  if (s_timer_sort_by_last_used) {
+  if (s_list_sort_by_last_used) {
     for (uint8_t i = 0; i < s_countdown_timers_count; i++) {
       s_timer_view_indices[i] = i;
     }
@@ -413,7 +426,7 @@ static void prv_set_timer_running(CountdownTimer *countdown_timer, bool running)
 /*
  * push the accent colour into every window that owns a highlight. the setters
  * stay per-window -- that is how the windows were built -- and this is the
- * one place that knows all six. PBL_COLOR platforms are exactly the ones
+ * one place that knows all eight. PBL_COLOR platforms are exactly the ones
  * that own the settings and option windows.
  */
 static void prv_apply_highlight_color(void) {
@@ -422,22 +435,28 @@ static void prv_apply_highlight_color(void) {
   duration_window_set_highlight_color(s_duration_window, s_highlight_color);
   popup_window_set_highlight_color(s_popup_window, s_highlight_color);
   settings_window_set_highlight_color(s_settings_window, s_highlight_color);
+  settings_window_set_highlight_color(s_list_window, s_highlight_color);
+  settings_window_set_highlight_color(s_timer_window, s_highlight_color);
   option_window_set_highlight_color(s_option_window, s_highlight_color);
 }
 #endif
 
 static uint8_t prv_get_setting(SettingId setting) {
   switch (setting) {
-    case SettingSortOrder:
-      return s_timer_sort_by_last_used ? 1 : 0;
-    case SettingGroup:
-      return s_grouping_disabled ? 1 : 0;
-    case SettingStartTimers:
-      return s_start_timers_automatically ? 1 : 0;
-    case SettingDelete:
-      return s_delete_immediately ? 1 : 0;
-    case SettingSnooze:
-      return s_snooze_option;
+    case SettingListSortOrder:
+      return s_list_sort_by_last_used ? 1 : 0;
+    case SettingListGroup:
+      return s_list_grouping_disabled ? 1 : 0;
+    case SettingListWrapAround:
+      return s_list_wrap_around_enabled ? 1 : 0;
+    case SettingTimerStartMode:
+      return s_timer_start_automatically ? 1 : 0;
+    case SettingTimerDeleteConfirm:
+      // Off is listed first but On -- confirm first -- is the shipped default, so
+      // the index and the bool run opposite ways here. see the note on the table.
+      return s_timer_delete_immediately ? 0 : 1;
+    case SettingTimerSnoozeLength:
+      return s_timer_snooze_option;
 #ifdef PBL_COLOR
     case SettingColor:
       for (uint8_t i = 0; i < COLOR_OPTIONS; i++) {
@@ -454,25 +473,32 @@ static uint8_t prv_get_setting(SettingId setting) {
 
 static void prv_set_setting(SettingId setting, uint8_t option) {
   switch (setting) {
-    case SettingSortOrder:
-      s_timer_sort_by_last_used = (option != 0);
+    case SettingListSortOrder:
+      s_list_sort_by_last_used = (option != 0);
       prv_rebuild_timer_view_indices();
       break;
-    case SettingGroup:
-      s_grouping_disabled = (option != 0);
+    case SettingListGroup:
+      s_list_grouping_disabled = (option != 0);
       // the storage array itself is grouped, so re-establish both invariants
       prv_timers_changed();
       break;
-    case SettingStartTimers:
-      s_start_timers_automatically = (option != 0);
+    case SettingListWrapAround:
+      s_list_wrap_around_enabled = (option != 0);
+      // the menu window owns the cursor, so hand it the new value now
+      menu_window_set_wrap_around(s_menu_window, s_list_wrap_around_enabled);
       break;
-    case SettingDelete:
-      s_delete_immediately = (option != 0);
+    case SettingTimerStartMode:
+      s_timer_start_automatically = (option != 0);
+      break;
+    case SettingTimerDeleteConfirm:
+      // option 0 is "Off" -- no confirmation -- which is the same thing as
+      // deleting immediately. inverse of the index, per the note in prv_get_setting
+      s_timer_delete_immediately = (option == 0);
       // the detail window owns the arming, so hand it the new value now
-      detail_window_set_delete_immediately(s_detail_window, s_delete_immediately);
+      detail_window_set_delete_immediately(s_detail_window, s_timer_delete_immediately);
       break;
-    case SettingSnooze:
-      s_snooze_option = (option < SNOOZE_OPTIONS) ? option : 0;
+    case SettingTimerSnoozeLength:
+      s_timer_snooze_option = (option < SNOOZE_OPTIONS) ? option : 0;
       break;
 #ifdef PBL_COLOR
     case SettingColor:
@@ -495,7 +521,7 @@ static void prv_set_setting(SettingId setting, uint8_t option) {
 
 static uint8_t prv_get_option_count(SettingId setting) {
   switch (setting) {
-    case SettingSnooze:
+    case SettingTimerSnoozeLength:
       return SNOOZE_OPTIONS;
 #ifdef PBL_COLOR
     case SettingColor:
@@ -541,7 +567,7 @@ static void app_timer_callback(void *data) {
     popup_window_set_pdc(s_popup_window, RESOURCE_ID_ICON_ALARM_CLOCK, true);
 #endif
     popup_window_set_auto_close_duration(s_popup_window, 15000);
-    popup_window_set_snooze_enabled(s_popup_window, s_snooze_option != SNOOZE_OPTION_OFF);
+    popup_window_set_snooze_enabled(s_popup_window, s_timer_snooze_option != SNOOZE_OPTION_OFF);
     // the alarm clock leaps upward while ringing, so the title stays below it
     popup_window_set_text_above(s_popup_window, false);
     popup_window_add_action_bar(s_popup_window);
@@ -582,13 +608,13 @@ static void app_timer_callback(void *data) {
 
 /*
  * PopupWindow snooze timer callback
- * snoozes the vibrating timer for the duration the Snooze setting picks.
+ * snoozes the vibrating timer for the duration the Snooze Length setting picks.
  * the popup hides the snooze icon when the setting is Off, so the delay
  * check is just a guard against a click config that predates the change
  */
 
 static void popup_window_snooze_timer_callback(CountdownTimer *countdown_timer, void *context) {
-  int64_t snooze_delay = s_snooze_delays[s_snooze_option];
+  int64_t snooze_delay = s_snooze_delays[s_timer_snooze_option];
   if (snooze_delay <= 0) {
     return;
   }
@@ -599,7 +625,7 @@ static void popup_window_snooze_timer_callback(CountdownTimer *countdown_timer, 
   // show detail if not on top
   if (!detail_window_get_topmost_window(s_detail_window)) {
     detail_window_set_countdown_timer(s_detail_window, countdown_timer);
-    detail_window_set_delete_immediately(s_detail_window, s_delete_immediately);
+    detail_window_set_delete_immediately(s_detail_window, s_timer_delete_immediately);
     detail_window_push(s_detail_window, false);
   }
   detail_window_deep_refresh(s_detail_window);
@@ -657,16 +683,16 @@ static void duration_window_complete_callback(int64_t duration, void *context) {
     }
     countdown_timer_list_add(s_countdown_timers, COUNTDOWN_TIMERS_MAX,
       &s_countdown_timers_count, countdown_timer);
-    // Start Timers is absolute: under Manually the create path lands the
+    // Start Mode is absolute: under Manually the create path lands the
     // timer paused. The chokepoint skips a stop that is not a real transition,
     // so this is a true no-op -- a fresh timer is already paused and owns no
     // pin.
-    prv_set_timer_running(countdown_timer, s_start_timers_automatically);
+    prv_set_timer_running(countdown_timer, s_timer_start_automatically);
     // update visuals
     menu_window_reload_data(s_menu_window);
     menu_window_refresh(s_menu_window);
     detail_window_set_countdown_timer(s_detail_window, countdown_timer);
-    detail_window_set_delete_immediately(s_detail_window, s_delete_immediately);
+    detail_window_set_delete_immediately(s_detail_window, s_timer_delete_immediately);
     duration_window_pop(duration_window, false);
     detail_window_push(s_detail_window, true);
     detail_window_deep_refresh(s_detail_window);
@@ -678,7 +704,7 @@ static void duration_window_complete_callback(int64_t duration, void *context) {
     countdown_timer_update(countdown_timer, duration, true);
     // the same setting governs edit as create: the timer lands in the state
     // the setting names either way
-    prv_set_timer_running(countdown_timer, s_start_timers_automatically);
+    prv_set_timer_running(countdown_timer, s_timer_start_automatically);
     detail_window_deep_refresh(s_detail_window);
     duration_window_pop(duration_window, true);
   }
@@ -836,8 +862,8 @@ static const char *settings_value_callback(uint8_t setting, void *context) {
       return s_color_names[prv_get_setting(SettingColor)];
     }
 #endif
-    if ((SettingId)setting == SettingSnooze) {
-      return s_snooze_options[prv_get_setting(SettingSnooze)];
+    if ((SettingId)setting == SettingTimerSnoozeLength) {
+      return s_snooze_options[prv_get_setting(SettingTimerSnoozeLength)];
     }
     return s_setting_options[setting][prv_get_setting((SettingId)setting)];
   }
@@ -864,9 +890,9 @@ static void settings_window_clicked_callback(uint8_t setting, void *context) {
     return;
   }
 #endif
-  if ((SettingId)setting == SettingSnooze) {
+  if ((SettingId)setting == SettingTimerSnoozeLength) {
     option_window_push(s_option_window, s_setting_names[setting], s_snooze_options,
-      SNOOZE_OPTIONS, prv_get_setting(SettingSnooze), NULL, true);
+      SNOOZE_OPTIONS, prv_get_setting(SettingTimerSnoozeLength), NULL, true);
     return;
   }
   option_window_push(s_option_window, s_setting_names[setting], s_setting_options[setting],
@@ -876,17 +902,103 @@ static void settings_window_clicked_callback(uint8_t setting, void *context) {
 
 
 /*
+ * The two groups
+ *
+ * The settings come in two groups, named by their enum prefixes: the
+ * `SettingList` three change how the timer list behaves, the `SettingTimer` three
+ * how a timer itself behaves. On every platform but aplite each group is a
+ * sub-menu of its own, so the settings list shows two rows -- `List` and `Timer`
+ * -- with the one setting that belongs to neither, Accent Color, beside them.
+ *
+ * A group's array and its window's row list are the caller's, and SettingsWindow
+ * only holds the pointer: the two group arrays together are the whole of
+ * SettingCount but for SettingColor, which is the one thing to keep true when a
+ * setting arrives. aplite has none of this: every setting is an inline row in its
+ * timer list, grouped or not, and it cannot afford the windows this grouping
+ * would need.
+ */
+
+/*
+ * the row ids of the two group rows. ids up to SettingCount are settings, so
+ * these sit above the enum where no setting can collide with them, and they live
+ * here rather than in settings_window.h because the window never reads them: it
+ * hands a row's id straight back to the callbacks that list it
+ */
+
+#define SETTINGS_ROW_GROUP_LIST  (SettingCount)
+#define SETTINGS_ROW_GROUP_TIMER (SettingCount + 1)
+
+static const char *const s_list_name = "List";
+static const char *const s_timer_name = "Timer";
+static const uint8_t s_list_setting_rows[] = {
+  SettingListSortOrder, SettingListGroup, SettingListWrapAround,
+};
+static const uint8_t s_timer_setting_rows[] = {
+  SettingTimerStartMode, SettingTimerDeleteConfirm, SettingTimerSnoozeLength,
+};
+static const uint8_t s_settings_rows[] = {
+  SETTINGS_ROW_GROUP_LIST,
+  SETTINGS_ROW_GROUP_TIMER,
+#ifdef PBL_COLOR
+  SettingColor,
+#endif
+};
+
+/*
+ * the settings list's three callbacks, which differ from the plain ones only in
+ * that two of their rows are ways into another list rather than settings with a
+ * value of their own
+ */
+
+static const char *settings_top_name_callback(uint8_t row_id, void *context) {
+  if (row_id == SETTINGS_ROW_GROUP_LIST) {
+    return s_list_name;
+  }
+  if (row_id == SETTINGS_ROW_GROUP_TIMER) {
+    return s_timer_name;
+  }
+  return settings_name_callback(row_id, context);
+}
+
+static const char *settings_top_value_callback(uint8_t row_id, void *context) {
+  if (row_id == SETTINGS_ROW_GROUP_LIST || row_id == SETTINGS_ROW_GROUP_TIMER) {
+    // no value: the row says "List" or "Timer" and nothing else, because what the
+    // group is set to is a question with three answers, and it is the next
+    // screen's job
+    return NULL;
+  }
+  return settings_value_callback(row_id, context);
+}
+
+static void settings_top_clicked_callback(uint8_t row_id, void *context) {
+  if (row_id == SETTINGS_ROW_GROUP_LIST) {
+    settings_window_push(s_list_window, true);
+    return;
+  }
+  if (row_id == SETTINGS_ROW_GROUP_TIMER) {
+    settings_window_push(s_timer_window, true);
+    return;
+  }
+  settings_window_clicked_callback(row_id, context);
+}
+
+
+
+/*
  * OptionWindow selected callback
  *
- * the option window has already popped itself by the time this runs, so the
- * settings window is the topmost again and shows the new value immediately.
- * the timer list underneath needs no touch: the MenuLayer redraws the rows
- * through the view mapping as soon as it is topmost again.
+ * the option window has already popped itself by the time this runs, so a
+ * settings window is the topmost again and shows the new value immediately --
+ * which one of the two it is depends on where the setting was reached from, so
+ * both are marked dirty. the timer list underneath needs no touch: the MenuLayer
+ * redraws the rows through the view mapping as soon as it is topmost again.
  */
 
 static void option_window_selected_callback(uint8_t option, void *context) {
   prv_set_setting(s_option_window_setting, option);
   settings_window_refresh(s_settings_window);
+  settings_window_refresh(s_list_window);
+  settings_window_refresh(s_timer_window);
 
   // log activity
   s_last_activity = countdown_timer_get_epoch_ms();
@@ -920,7 +1032,7 @@ static void menu_window_click_callback(MenuRowKind kind, uint8_t row, void *cont
         break;
       }
       detail_window_set_countdown_timer(s_detail_window, countdown_timer);
-      detail_window_set_delete_immediately(s_detail_window, s_delete_immediately);
+      detail_window_set_delete_immediately(s_detail_window, s_timer_delete_immediately);
       detail_window_push(s_detail_window, true);
       detail_window_deep_refresh(s_detail_window);
       if (s_app_timer != NULL) {
@@ -945,7 +1057,7 @@ static void menu_window_click_callback(MenuRowKind kind, uint8_t row, void *cont
       const uint8_t next = (prv_get_setting((SettingId)setting) + 1) %
         prv_get_option_count((SettingId)setting);
       prv_set_setting((SettingId)setting, next);
-      if ((SettingId)setting == SettingSortOrder || (SettingId)setting == SettingGroup) {
+      if ((SettingId)setting == SettingListSortOrder || (SettingId)setting == SettingListGroup) {
         // the timer order just changed, so reload -- which drops the
         // selection back to the "+" row. put the user back on the row they
         // just pressed.
@@ -986,23 +1098,27 @@ static void initialize(void) {
   if (persist_exists(TIMER_SORT_BY_DURATION_PERSIST_KEY)) {
     // stored int keeps 1.2.6's meaning: 1 = sort by duration. this fork
     // defaults to duration, so the variable is its inverse
-    s_timer_sort_by_last_used = (persist_read_int(TIMER_SORT_BY_DURATION_PERSIST_KEY) == 0);
+    s_list_sort_by_last_used = (persist_read_int(TIMER_SORT_BY_DURATION_PERSIST_KEY) == 0);
   }
   if (persist_exists(TIMER_GROUPING_DISABLED_PERSIST_KEY)) {
     // a key this fork introduced, so it stores the bool's own meaning: no
     // 1.2.6 contract to honour and no inversion at the load boundary
-    s_grouping_disabled = (persist_read_int(TIMER_GROUPING_DISABLED_PERSIST_KEY) != 0);
+    s_list_grouping_disabled = (persist_read_int(TIMER_GROUPING_DISABLED_PERSIST_KEY) != 0);
+  }
+  if (persist_exists(TIMER_WRAP_AROUND_PERSIST_KEY)) {
+    // the same: a key of this fork's, storing its bool's own meaning
+    s_list_wrap_around_enabled = (persist_read_int(TIMER_WRAP_AROUND_PERSIST_KEY) != 0);
   }
   if (persist_exists(TIMER_START_MANUALLY_PERSIST_KEY)) {
     // same contract: 1 = start manually, and the fork's default inverts it
-    s_start_timers_automatically = (persist_read_int(TIMER_START_MANUALLY_PERSIST_KEY) == 0);
+    s_timer_start_automatically = (persist_read_int(TIMER_START_MANUALLY_PERSIST_KEY) == 0);
   }
   if (persist_exists(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY)) {
-    s_delete_immediately = (persist_read_int(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY) != 0);
+    s_timer_delete_immediately = (persist_read_int(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY) != 0);
   }
   if (persist_exists(TIMER_SNOOZE_PERSIST_KEY)) {
     int saved = persist_read_int(TIMER_SNOOZE_PERSIST_KEY);
-    s_snooze_option = (saved >= 0 && saved < SNOOZE_OPTIONS) ? (uint8_t)saved : 0;
+    s_timer_snooze_option = (saved >= 0 && saved < SNOOZE_OPTIONS) ? (uint8_t)saved : 0;
   }
 #ifdef PBL_COLOR
   if (persist_exists(TIMER_HIGHLIGHT_COLOR_PERSIST_KEY)) {
@@ -1027,6 +1143,8 @@ static void initialize(void) {
   };
   s_menu_window = menu_window_create(menu_callbacks, true);
   menu_window_set_highlight_color(s_menu_window, PBL_IF_COLOR_ELSE(s_highlight_color, GColorBlack));
+  // the cursor needs the setting it was loaded with before the list is walked
+  menu_window_set_wrap_around(s_menu_window, s_list_wrap_around_enabled);
   menu_window_refresh(s_menu_window);
 
   // create detail window
@@ -1058,12 +1176,28 @@ static void initialize(void) {
   // the two windows' .text does not fit in its 24 KB alongside the data
 #ifndef PBL_PLATFORM_APLITE
   SettingsWindowCallbacks settings_callbacks = {
+    .get_name = settings_top_name_callback,
+    .get_value = settings_top_value_callback,
+    .clicked = settings_top_clicked_callback,
+  };
+  s_settings_window = settings_window_create(settings_callbacks, "Settings", s_settings_rows,
+    sizeof(s_settings_rows) / sizeof(s_settings_rows[0]));
+  settings_window_set_highlight_color(s_settings_window,
+    PBL_IF_COLOR_ELSE(s_highlight_color, GColorBlack));
+  // the two groups' own sub-menus, fed by the plain callbacks: every row in each
+  // is a setting, so there is nothing extra to say about them
+  SettingsWindowCallbacks group_callbacks = {
     .get_name = settings_name_callback,
     .get_value = settings_value_callback,
     .clicked = settings_window_clicked_callback,
   };
-  s_settings_window = settings_window_create(settings_callbacks);
-  settings_window_set_highlight_color(s_settings_window,
+  s_list_window = settings_window_create(group_callbacks, s_list_name, s_list_setting_rows,
+    sizeof(s_list_setting_rows) / sizeof(s_list_setting_rows[0]));
+  settings_window_set_highlight_color(s_list_window,
+    PBL_IF_COLOR_ELSE(s_highlight_color, GColorBlack));
+  s_timer_window = settings_window_create(group_callbacks, s_timer_name, s_timer_setting_rows,
+    sizeof(s_timer_setting_rows) / sizeof(s_timer_setting_rows[0]));
+  settings_window_set_highlight_color(s_timer_window,
     PBL_IF_COLOR_ELSE(s_highlight_color, GColorBlack));
   s_option_window = option_window_create(option_window_selected_callback, NULL);
   option_window_set_highlight_color(s_option_window,
@@ -1079,7 +1213,7 @@ static void initialize(void) {
       if (countdown_timer != NULL) {
         // show timer in detail window
         detail_window_set_countdown_timer(s_detail_window, countdown_timer);
-        detail_window_set_delete_immediately(s_detail_window, s_delete_immediately);
+        detail_window_set_delete_immediately(s_detail_window, s_timer_delete_immediately);
         detail_window_push(s_detail_window, true);
         detail_window_deep_refresh(s_detail_window);
       }
@@ -1155,11 +1289,12 @@ static void deinitialize(void) {
   // persist state
   persist_write_int(PERSIST_VERSION_KEY, PERSIST_VERSION);
   persist_write_int(COUNTDOWN_TIMER_ID_PERSIST_KEY, s_countdown_timer_id_max);
-  persist_write_int(TIMER_SORT_BY_DURATION_PERSIST_KEY, s_timer_sort_by_last_used ? 0 : 1);
-  persist_write_int(TIMER_GROUPING_DISABLED_PERSIST_KEY, s_grouping_disabled ? 1 : 0);
-  persist_write_int(TIMER_START_MANUALLY_PERSIST_KEY, s_start_timers_automatically ? 0 : 1);
-  persist_write_int(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY, s_delete_immediately ? 1 : 0);
-  persist_write_int(TIMER_SNOOZE_PERSIST_KEY, s_snooze_option);
+  persist_write_int(TIMER_SORT_BY_DURATION_PERSIST_KEY, s_list_sort_by_last_used ? 0 : 1);
+  persist_write_int(TIMER_GROUPING_DISABLED_PERSIST_KEY, s_list_grouping_disabled ? 1 : 0);
+  persist_write_int(TIMER_WRAP_AROUND_PERSIST_KEY, s_list_wrap_around_enabled ? 1 : 0);
+  persist_write_int(TIMER_START_MANUALLY_PERSIST_KEY, s_timer_start_automatically ? 0 : 1);
+  persist_write_int(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY, s_timer_delete_immediately ? 1 : 0);
+  persist_write_int(TIMER_SNOOZE_PERSIST_KEY, s_timer_snooze_option);
 #ifdef PBL_COLOR
   persist_write_int(TIMER_HIGHLIGHT_COLOR_PERSIST_KEY, s_highlight_color.argb);
 #endif
@@ -1181,6 +1316,8 @@ static void deinitialize(void) {
   popup_window_destroy(s_popup_window);
 #ifndef PBL_PLATFORM_APLITE
   option_window_destroy(s_option_window);
+  settings_window_destroy(s_timer_window);
+  settings_window_destroy(s_list_window);
   settings_window_destroy(s_settings_window);
 #endif
   duration_window_destroy(s_duration_window);

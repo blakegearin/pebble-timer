@@ -2,12 +2,13 @@
  * FILENAME :        settings_window.h
  *
  * DESCRIPTION :
- *      Create, destroy, and manage a SettingsWindow to list the app's
- *      settings, each drawn as a name-over-value cell.
+ *      Create, destroy, and manage a SettingsWindow to list settings, each
+ *      drawn as a name-over-value cell.
  *
  * PUBLIC FUNCTIONS :
  *      SettingsWindow  *settings_window_create(SettingsWindowCallbacks
- *                          settings_window_callbacks);
+ *                          settings_window_callbacks, const char *title,
+ *                          const uint8_t *row_ids, uint8_t num_rows);
  *      void            settings_window_destroy(SettingsWindow
  *                          *settings_window);
  *      void            settings_window_push(SettingsWindow
@@ -17,10 +18,12 @@
  *      void            settings_window_set_highlight_color(SettingsWindow
  *                          *settings_window, GColor color);
  *
- * NOTES :      Not compiled on aplite, where the settings are inline rows in
- *              the timer list instead -- see .c for the guard.
+ * NOTES :      One window type, three instances: the app's settings list and the
+ *              List and Timer sub-menus it opens. Not compiled on aplite, where
+ *              the settings are inline rows in the timer list instead -- see .c
+ *              for the guard.
  *
- * AUTHOR :     Blake Gearin        START DATE :    24/09/26
+ * AUTHOR :     Blake Gearin        START DATE :    2026-09-24
  *
  */
 
@@ -31,36 +34,51 @@
 
 
 /*******************************************************************************
+ * ROW IDS
+ */
+
+/*
+ * A SettingsWindow is a list of rows, and what a row's id means is entirely the
+ * caller's business: the window never interprets one, it holds the array it was
+ * given and hands each row's id straight back to get_name, get_value and clicked.
+ * So the id space lives in main.c, which extends the SettingId enum with a couple
+ * of group-row ids that open another SettingsWindow rather than an option list.
+ */
+
+
+
+/*******************************************************************************
  * CALLBACK DECLARATIONS
  */
 
 /*
  * Callback:    SettingsWindowGetName
  * ----------------------------------
- * gets the display name of one setting, e.g. "Sort Order"
+ * gets the display name of one row, e.g. "Sort Order"
  */
 
-typedef const char *(*SettingsWindowGetName)(uint8_t setting, void *context);
+typedef const char *(*SettingsWindowGetName)(uint8_t row_id, void *context);
 
 
 
 /*
  * Callback:    SettingsWindowGetValue
  * -----------------------------------
- * gets the label of the option a setting is currently set to
+ * gets the label of the option a row is currently set to, or NULL when the row
+ * has no value to show -- a group row is navigation, not a setting
  */
 
-typedef const char *(*SettingsWindowGetValue)(uint8_t setting, void *context);
+typedef const char *(*SettingsWindowGetValue)(uint8_t row_id, void *context);
 
 
 
 /*
  * Callback:    SettingsWindowClickCallback
  * ----------------------------------------
- * called when a setting row is clicked
+ * called when a row is clicked
  */
 
-typedef void (*SettingsWindowClickCallback)(uint8_t setting, void *context);
+typedef void (*SettingsWindowClickCallback)(uint8_t row_id, void *context);
 
 
 
@@ -102,11 +120,20 @@ typedef struct SettingsWindow SettingsWindow;
  * creates a new SettingsWindow in memory but does not push it into view
  *
  *  settings_window_callbacks: callbacks for communication
+ *  title: the window's own name -- drawn as a section header on rect and not
+ *      at all on round, where a header has no pixels to land in. Owned by the
+ *      caller and must outlive the window.
+ *  row_ids: the rows to list, in order, as ids for the callbacks to read --
+ *      SettingsWindow gives them no meaning of its own. Owned by the caller and
+ *      must outlive the window; it is not copied.
+ *  num_rows: how many row ids there are
  *
  *  returns: a pointer to a new SettingsWindow structure
  */
 
-SettingsWindow *settings_window_create(SettingsWindowCallbacks settings_window_callbacks);
+SettingsWindow *settings_window_create(SettingsWindowCallbacks settings_window_callbacks,
+                                       const char *title, const uint8_t *row_ids,
+                                       uint8_t num_rows);
 
 
 

@@ -22,6 +22,8 @@
  *                      uint8_t row);
  *      int16_t     menu_window_row_to_setting_index(MenuWindow *menu_window,
  *                      uint8_t row);
+ *      void        menu_window_set_wrap_around(MenuWindow *menu_window,
+ *                      bool wrap_around);
  *      void        menu_window_set_highlight_color(MenuWindow *menu_window,
  *                      GColor color);
  *
@@ -301,3 +303,18 @@ int16_t menu_window_row_to_setting_index(MenuWindow *menu_window, uint8_t row);
  */
 
 void menu_window_set_highlight_color(MenuWindow *menu_window, GColor color);
+
+
+
+/*
+ * Function:    menu_window_set_wrap_around
+ * ----------------------------------------
+ * turns the Wrap Around setting on or off: with it on, a step past either end
+ * of the list lands on the other end, and with it off the ends stop the cursor
+ * the way a list normally does.
+ *
+ *  menu_window: a pointer to the window whose cursor should wrap
+ *  wrap_around: whether the ends of the list wrap onto each other
+ */
+
+void menu_window_set_wrap_around(MenuWindow *menu_window, bool wrap_around);

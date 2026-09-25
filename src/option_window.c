@@ -18,7 +18,7 @@
  *      void          option_window_set_highlight_color(OptionWindow
  *                          *option_window, GColor color);
  *
- * AUTHOR :     Blake Gearin        START DATE :    24/09/26
+ * AUTHOR :     Blake Gearin        START DATE :    2026-09-24
  *
  */
 
