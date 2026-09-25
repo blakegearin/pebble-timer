@@ -18,6 +18,10 @@
  *                          CountdownTimer *countdown_timer);
  *      CountdownTimer  *duration_window_get_timer(DurationWindow
  *                          *duration_window);
+ *      void            duration_window_set_snooze_mode(DurationWindow
+ *                          *duration_window, int64_t current);
+ *      bool            duration_window_get_snooze_mode(DurationWindow
+ *                          *duration_window);
  *      void            duration_window_set_highlight_color(DurationWindow
  *                          *duration_window, GColor color);
  *

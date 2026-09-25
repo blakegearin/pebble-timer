@@ -41,8 +41,10 @@
  * A SettingsWindow is a list of rows, and what a row's id means is entirely the
  * caller's business: the window never interprets one, it holds the array it was
  * given and hands each row's id straight back to get_name, get_value and clicked.
- * So the id space lives in main.c, which extends the SettingId enum with a couple
- * of group-row ids that open another SettingsWindow rather than an option list.
+ * So the id space is settings.h's: the SettingId enum, plus the group-row ids
+ * `SETTINGS_ROW_GROUP` places just above `SettingCount`, which open another
+ * SettingsWindow rather than an option list. main.c hands those ids over from
+ * settings.c's row tables.
  */
 
 

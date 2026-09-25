@@ -32,7 +32,7 @@ act, not a display, and collides with `settings_window`.
   six are flat inline rows; everywhere else each is a sub-menu off the settings
   list. Beware: `Group` is also the *name of a setting* (the running/paused
   grouping), and `SettingListGroup` is the setting while the group rows are
-  `SETTINGS_ROW_GROUP_*`.
+  `SettingsGroup` ids wrapped by the `SETTINGS_ROW_GROUP()` macro.
 - **Option** -- one choice within one setting (`Recency` / `Duration`).
   Every setting has two options except `Snooze Length` -- a duration dialled
   on the picker, where zero means `Off` -- and `Accent Color`, whose options
