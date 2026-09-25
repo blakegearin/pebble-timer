@@ -31,6 +31,8 @@
  *      void            popup_window_set_highlight_color(PopupWindow
  *                          *popup_window, GColor color);
  *      void            popup_window_add_action_bar(PopupWindow *popup_window);
+ *      void            popup_window_set_snooze_enabled(PopupWindow
+ *                          *popup_window, bool enabled);
  *      void            popup_window_remove_action_bar(PopupWindow
  *                          *popup_window);
  *      void            popup_window_set_action_bar_callbacks(PopupWindow
@@ -301,6 +303,20 @@ void popup_window_set_highlight_color(PopupWindow *popup_window, GColor color);
  */
 
 void popup_window_add_action_bar(PopupWindow *popup_window);
+
+
+
+/*
+ * Function:    popup_window_set_snooze_enabled
+ * --------------------------------------------
+ * sets whether the ActionBar shows the snooze icon next to its
+ * up button; pass false before pushing to hide it
+ *
+ *  popup_window: a pointer to the PopupWindow to configure
+ *  enabled: whether the snooze icon is shown
+ */
+
+void popup_window_set_snooze_enabled(PopupWindow *popup_window, bool enabled);
 
 
 

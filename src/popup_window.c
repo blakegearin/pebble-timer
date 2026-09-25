@@ -88,6 +88,7 @@ struct PopupWindow {
   CountdownTimer  *countdown_timer;    //< timer associated with PopupWindow
   int64_t     set_time, close_time;    //< time opened and time to close
   bool            action_visible;      //< whether the ActionBar is visible
+  bool            snooze_enabled;      //< whether the ActionBar shows the snooze icon
 
   GColor highlight_color;
   const char* title;
@@ -292,7 +293,9 @@ static void prv_window_load(Window* window){
   popup_window->action = action_bar_layer_create();
   action_bar_layer_set_context(popup_window->action, popup_window);
   action_bar_layer_set_click_config_provider(popup_window->action, click_config_provider);
-  action_bar_layer_set_icon(popup_window->action, BUTTON_ID_UP, popup_window->snooze_icon);
+  if (popup_window->snooze_enabled) {
+    action_bar_layer_set_icon(popup_window->action, BUTTON_ID_UP, popup_window->snooze_icon);
+  }
   action_bar_layer_set_icon(popup_window->action, BUTTON_ID_DOWN, popup_window->stop_icon);
 
   if (popup_window->action_visible) {
@@ -358,6 +361,8 @@ PopupWindow *popup_window_create(void) {
   // zero some values
   popup_window->countdown_timer = NULL;
   popup_window->action_visible = false;
+  // snooze is on unless main.c says otherwise before the next push
+  popup_window->snooze_enabled = true;
 #ifndef PBL_PLATFORM_APLITE
   popup_window->draw_sequence = NULL;
   popup_window->draw_frame = NULL;
@@ -572,6 +577,17 @@ void popup_window_set_highlight_color(PopupWindow *popup_window, GColor color) {
 
 void popup_window_add_action_bar(PopupWindow *popup_window) {
   popup_window->action_visible = true;
+}
+
+
+
+/*
+ * sets whether the ActionBar shows the snooze icon
+ * set before pushing: the icon is laid out when the window loads
+ */
+
+void popup_window_set_snooze_enabled(PopupWindow *popup_window, bool enabled) {
+  popup_window->snooze_enabled = enabled;
 }
 
 

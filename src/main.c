@@ -33,10 +33,10 @@
 #define TIMER_START_MANUALLY_PERSIST_KEY 51827394
 #define TIMER_DELETE_IMMEDIATELY_PERSIST_KEY 68013925
 #define TIMER_HIGHLIGHT_COLOR_PERSIST_KEY 19283746
+#define TIMER_SNOOZE_PERSIST_KEY 37492058
 #define PERSIST_VERSION 1
 #define PERSIST_VERSION_KEY 46134672
 #define COUNTDOWN_TIMERS_MAX 8
-#define COUNTDOWN_TIMER_SNOOZE_DELAY 60000 // milliseconds
 #define TIMER_MIN_LENGTH 1000 // milliseconds
 #define TIMELINE_MIN_LENGTH 900000 // milliseconds
 #define INACTIVITY_THRESHOLD 900000 // length of time before refresh throttling in milliseconds
@@ -81,6 +81,10 @@ static bool s_grouping_disabled = false;
 // load/store boundary.
 static bool s_start_timers_automatically = false;
 static bool s_delete_immediately = false;
+// the Snooze setting is not a bool, so the rule above cannot name its default
+// either; index 0 is the shipped one ("1 Minute") and an absent persist key
+// leaves this initialiser untouched, exactly like the accent colour's
+static uint8_t s_snooze_option = 0;
 #ifdef PBL_COLOR
 // the app's accent colour. not a bool, so the false-is-default rule above
 // cannot name it; the job is done here instead -- this initialiser is the
@@ -97,11 +101,11 @@ static int64_t s_last_activity = 0;
  * option index 0 is always the shipped default, which is what a zero value
  * means. this is an enum and a string table, not the data-driven descriptor
  * table the spec rejected -- it generates no UI. it exists because aplite
- * renders the same four settings as rows in the timer list while the other
+ * renders the same settings as rows in the timer list while the other
  * platforms render them in the settings window: two renderers, one copy.
  */
 static const char *const s_setting_names[SettingCount] = {
-  "Sort Order", "Group", "Start Timers", "Delete",
+  "Sort Order", "Group", "Start Timers", "Delete", "Snooze",
 #ifdef PBL_COLOR
   "Accent Color",
 #endif
@@ -111,10 +115,27 @@ static const char *const s_setting_options[SettingCount][2] = {
   { "Running First", "Off"           },
   { "Manually",      "Automatically" },
   { "Confirm First", "Immediately"   },
+  { NULL, NULL },  // Snooze's options are the delay list below, not this table
 #ifdef PBL_COLOR
   { NULL, NULL },  // Accent Color's options are the palette below, not this table
 #endif
 };
+
+/*
+ * the Snooze setting's options: how long the alarm waits before going off
+ * again when the snooze button is pressed. index 0 is the shipped default
+ * per the rule in settings.h, and Off sits last as its own sentinel: delay 0
+ * means the popup shows no snooze icon at all.
+ */
+#define SNOOZE_OPTIONS 7
+#define SNOOZE_OPTION_OFF (SNOOZE_OPTIONS - 1)
+static const char *const s_snooze_options[SNOOZE_OPTIONS] = {
+  "1 Minute", "5 Minutes", "10 Minutes", "15 Minutes", "30 Minutes", "1 Hour", "Off",
+};
+static const int64_t s_snooze_delays[SNOOZE_OPTIONS] = {
+  60000, 300000, 600000, 900000, 1800000, 3600000, 0,
+};
+
 #ifdef PBL_COLOR
 // the Accent Color setting's options: all sixty-four colours a colour platform can
 // render, in rainbow order -- red, orange, yellow, green, blue, indigo,
@@ -415,6 +436,8 @@ static uint8_t prv_get_setting(SettingId setting) {
       return s_start_timers_automatically ? 1 : 0;
     case SettingDelete:
       return s_delete_immediately ? 1 : 0;
+    case SettingSnooze:
+      return s_snooze_option;
 #ifdef PBL_COLOR
     case SettingColor:
       for (uint8_t i = 0; i < COLOR_OPTIONS; i++) {
@@ -448,6 +471,9 @@ static void prv_set_setting(SettingId setting, uint8_t option) {
       // the detail window owns the arming, so hand it the new value now
       detail_window_set_delete_immediately(s_detail_window, s_delete_immediately);
       break;
+    case SettingSnooze:
+      s_snooze_option = (option < SNOOZE_OPTIONS) ? option : 0;
+      break;
 #ifdef PBL_COLOR
     case SettingColor:
       s_highlight_color = s_color_values[option];
@@ -456,6 +482,27 @@ static void prv_set_setting(SettingId setting, uint8_t option) {
 #endif
     default:
       break;
+  }
+}
+
+
+/*
+ * how many options a setting offers
+ *
+ * every renderer that has to walk a setting's options -- the aplite row cycle
+ * and the option window push -- asks here instead of assuming two
+ */
+
+static uint8_t prv_get_option_count(SettingId setting) {
+  switch (setting) {
+    case SettingSnooze:
+      return SNOOZE_OPTIONS;
+#ifdef PBL_COLOR
+    case SettingColor:
+      return COLOR_OPTIONS;
+#endif
+    default:
+      return 2;
   }
 }
 
@@ -494,6 +541,7 @@ static void app_timer_callback(void *data) {
     popup_window_set_pdc(s_popup_window, RESOURCE_ID_ICON_ALARM_CLOCK, true);
 #endif
     popup_window_set_auto_close_duration(s_popup_window, 15000);
+    popup_window_set_snooze_enabled(s_popup_window, s_snooze_option != SNOOZE_OPTION_OFF);
     popup_window_add_action_bar(s_popup_window);
     popup_window_push(s_popup_window, true);
     popup_window_set_vibes();
@@ -532,11 +580,17 @@ static void app_timer_callback(void *data) {
 
 /*
  * PopupWindow snooze timer callback
- * snoozes the vibrating timer for one minute
+ * snoozes the vibrating timer for the duration the Snooze setting picks.
+ * the popup hides the snooze icon when the setting is Off, so the delay
+ * check is just a guard against a click config that predates the change
  */
 
 static void popup_window_snooze_timer_callback(CountdownTimer *countdown_timer, void *context) {
-  countdown_timer_update(countdown_timer, COUNTDOWN_TIMER_SNOOZE_DELAY, false);
+  int64_t snooze_delay = s_snooze_delays[s_snooze_option];
+  if (snooze_delay <= 0) {
+    return;
+  }
+  countdown_timer_update(countdown_timer, snooze_delay, false);
   countdown_timer_start(countdown_timer);
   prv_promote_timer(countdown_timer);
   popup_window_pop(s_popup_window, true);
@@ -777,6 +831,9 @@ static const char *settings_value_callback(uint8_t setting, void *context) {
       return s_color_names[prv_get_setting(SettingColor)];
     }
 #endif
+    if ((SettingId)setting == SettingSnooze) {
+      return s_snooze_options[prv_get_setting(SettingSnooze)];
+    }
     return s_setting_options[setting][prv_get_setting((SettingId)setting)];
   }
   // error handling
@@ -802,6 +859,11 @@ static void settings_window_clicked_callback(uint8_t setting, void *context) {
     return;
   }
 #endif
+  if ((SettingId)setting == SettingSnooze) {
+    option_window_push(s_option_window, s_setting_names[setting], s_snooze_options,
+      SNOOZE_OPTIONS, prv_get_setting(SettingSnooze), NULL, true);
+    return;
+  }
   option_window_push(s_option_window, s_setting_names[setting], s_setting_options[setting],
     2, prv_get_setting((SettingId)setting), NULL, true);
 }
@@ -870,12 +932,14 @@ static void menu_window_click_callback(MenuRowKind kind, uint8_t row, void *cont
       break;
     }
     case MenuRowSetting: {
-      // on aplite a settings row flips in place, in one press
+      // on aplite a settings row cycles its options in place, in one press
       const int16_t setting = menu_window_row_to_setting_index(s_menu_window, row);
       if (setting < 0) {
         break;
       }
-      prv_set_setting((SettingId)setting, prv_get_setting((SettingId)setting) ? 0 : 1);
+      const uint8_t next = (prv_get_setting((SettingId)setting) + 1) %
+        prv_get_option_count((SettingId)setting);
+      prv_set_setting((SettingId)setting, next);
       if ((SettingId)setting == SettingSortOrder || (SettingId)setting == SettingGroup) {
         // the timer order just changed, so reload -- which drops the
         // selection back to the "+" row. put the user back on the row they
@@ -930,6 +994,10 @@ static void initialize(void) {
   }
   if (persist_exists(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY)) {
     s_delete_immediately = (persist_read_int(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY) != 0);
+  }
+  if (persist_exists(TIMER_SNOOZE_PERSIST_KEY)) {
+    int saved = persist_read_int(TIMER_SNOOZE_PERSIST_KEY);
+    s_snooze_option = (saved >= 0 && saved < SNOOZE_OPTIONS) ? (uint8_t)saved : 0;
   }
 #ifdef PBL_COLOR
   if (persist_exists(TIMER_HIGHLIGHT_COLOR_PERSIST_KEY)) {
@@ -1086,6 +1154,7 @@ static void deinitialize(void) {
   persist_write_int(TIMER_GROUPING_DISABLED_PERSIST_KEY, s_grouping_disabled ? 1 : 0);
   persist_write_int(TIMER_START_MANUALLY_PERSIST_KEY, s_start_timers_automatically ? 0 : 1);
   persist_write_int(TIMER_DELETE_IMMEDIATELY_PERSIST_KEY, s_delete_immediately ? 1 : 0);
+  persist_write_int(TIMER_SNOOZE_PERSIST_KEY, s_snooze_option);
 #ifdef PBL_COLOR
   persist_write_int(TIMER_HIGHLIGHT_COLOR_PERSIST_KEY, s_highlight_color.argb);
 #endif

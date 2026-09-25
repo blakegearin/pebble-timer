@@ -2,9 +2,10 @@
  * FILENAME :        option_window.c
  *
  * DESCRIPTION :
- *      Create, destroy, and manage a reusable radio option window, drawing
- *      the selection circles by hand because the firmware's own radio
- *      resource is not exported to apps.
+ *      Create, destroy, and manage a reusable radio option window: on rect,
+ *      a left label with a hand-drawn selection circle because the
+ *      firmware's own radio resource is not exported to apps; on round, a
+ *      centred label with no circle, the committed option marked by weight.
  *
  * PUBLIC FUNCTIONS :
  *      OptionWindow  *option_window_create(OptionWindowSelectCallback
@@ -32,18 +33,16 @@
 #ifndef PBL_PLATFORM_APLITE
 
 // Firmware geometry (issue 01): a 14px outer circle with a 2px ring and a
-// 6px filled centre, set in from the right edge by 7px on rect, 10 on emery
-// and 35 on round. There is no SDK helper and no resource for any of it.
+// 6px filled centre, set in from the right edge by 7px on rect and 10 on
+// emery. There is no SDK helper and no resource for any of it. Round draws
+// no circle at all -- see option_draw_row_callback -- so this is rect-only.
 #define OPTION_RADIO_RADIUS 7
 #define OPTION_RADIO_DOT_RADIUS 3
-#ifdef PBL_ROUND
-#define OPTION_RADIO_INSET 35
-#elif defined(PBL_PLATFORM_EMERY)
+#ifdef PBL_PLATFORM_EMERY
 #define OPTION_RADIO_INSET 10
 #else
 #define OPTION_RADIO_INSET 7
 #endif
-#define OPTION_RADIO_TEXT_GAP 6    //< breathing room between label and circle
 #define OPTION_ROUND_TEXT_LEFT_INSET 20
 #define OPTION_RECT_TEXT_LEFT_INSET 6  //< the inset menu_cell_basic_draw uses
 
@@ -138,19 +137,45 @@ static void option_draw_header_callback(GContext *ctx, const Layer *cell_layer,
  * have chosen for us, and hardcoding one breaks emery and gabbro, which run
  * at Large. resolve it from preferred_content_size() instead, the way
  * system_theme.c does. The bold flag picks between a size and its bold
- * twin -- 28 has no bold twin at Large, so there both weights are 28.
+ * twin; with no radio on round, that twin is the only thing marking which
+ * option is committed, so every size must honour it -- including 28.
  */
 
 static GFont option_title_font(bool bold) {
   switch (preferred_content_size()) {
     case PreferredContentSizeSmall:
       return fonts_get_system_font(bold ? FONT_KEY_GOTHIC_18_BOLD : FONT_KEY_GOTHIC_18);
-    case PreferredContentSizeLarge: return fonts_get_system_font(FONT_KEY_GOTHIC_28);
+    case PreferredContentSizeLarge:
     case PreferredContentSizeExtraLarge:
       return fonts_get_system_font(bold ? FONT_KEY_GOTHIC_28_BOLD : FONT_KEY_GOTHIC_28);
     default:
       return fonts_get_system_font(bold ? FONT_KEY_GOTHIC_24_BOLD : FONT_KEY_GOTHIC_24);
   }
+}
+
+/*
+ * the vertical room one line of the title font actually takes
+ *
+ * graphics_text_layout_get_content_size answers with the line ADVANCE, and
+ * for the system Gothic faces the renderer puts the baseline right at the
+ * bottom of that advance -- capitals and descenders both overflow the
+ * reported box (the g in "Bulgarian Rose" reaches ~6 px past it). So the
+ * advance alone is neither a centring basis nor a cell height: measure it
+ * as the height a second line adds, and give rows advance + 12 px, which is
+ * what it takes for the full ink of 18/24/28 pt Gothic to sit inside a cell
+ * without the row boundary cutting tails off.
+ */
+
+#define OPTION_LINE_SLACK 12  //< px around the line advance for capital + descender ink
+
+static int16_t option_line_pitch(GFont font) {
+  const GRect probe = GRect(0, 0, 64, 200);
+  const int16_t one = graphics_text_layout_get_content_size(
+    "Ag", font, probe, GTextOverflowModeFill, GTextAlignmentLeft).h;
+  const int16_t two = graphics_text_layout_get_content_size(
+    "Ag\nAg", font, probe, GTextOverflowModeFill, GTextAlignmentLeft).h;
+  const int16_t pitch = two - one;
+  return (pitch > one) ? pitch : one;
 }
 #endif
 
@@ -163,23 +188,21 @@ static GFont option_title_font(bool bold) {
  * the selected option. colours follow the highlight, never a literal
  * GColorBlack, which would disappear on a highlighted row.
  *
- * only the plain settings call this. The colour screen has no circle: its
+ * only the plain settings on rect call this -- round has no circles at all
+ * (see option_draw_row_callback), and the colour screen never had one: its
  * focused row is painted in the colour it names and the committed value is
- * the bold label. See option_draw_color_label.
+ * the bold label. See option_draw_label.
  */
 
+#ifndef PBL_ROUND
 static void option_draw_radio(GContext *ctx, const Layer *cell_layer,
                               const OptionWindow *option_window, uint8_t row) {
   const GRect bounds = layer_get_bounds(cell_layer);
   // Gothic capital ink sits a few px below the middle of the line box it was
   // measured in, so a ring centred on the cell geometry reads as riding above
-  // the label. On round -- where the label is hand-drawn and the cell heights
-  // are fixed firmware constants -- drop the ring onto the ink. Rect uses
-  // menu_cell_basic_draw, whose own centring already agrees with ours.
-  int16_t center_y = bounds.size.h / 2;
-#ifdef PBL_ROUND
-  center_y += 4;
-#endif
+  // the label. Rect uses menu_cell_basic_draw, whose own centring already
+  // agrees with ours.
+  const int16_t center_y = bounds.size.h / 2;
   const GPoint center = GPoint(bounds.size.w - OPTION_RADIO_INSET - OPTION_RADIO_RADIUS,
                                center_y);
   const GColor color = menu_cell_layer_is_highlighted(cell_layer) ?
@@ -192,23 +215,26 @@ static void option_draw_radio(GContext *ctx, const Layer *cell_layer,
     graphics_fill_circle(ctx, center, OPTION_RADIO_DOT_RADIUS);
   }
 }
+#endif  // PBL_ROUND
 
 
 
 /*
- * draw one label on the colour screen
+ * draw one hand-drawn label
  *
- * with no radio, weight is the only thing marking which colour is in use:
- * bold for the committed value, regular for the rest, while the coloured
- * band says where the cursor is. menu_cell_basic_draw is always-bold -- it
- * drew these titles bold on every row -- so the label is hand-drawn
- * instead. There is no circle, so no gutter to reserve either; the three-
- * word names live at the end of the rainbow where they still mostly fit,
- * and ellipsize rather than clip if they do not.
+ * this is every row on round and the colour screen on rect. With no radio
+ * (round dropped them; the colour screen never had one), weight is the only
+ * thing marking which option is committed: bold for it, regular for the
+ * rest, while the highlighted band says where the cursor is.
+ * menu_cell_basic_draw is always-bold -- it drew these titles bold on every
+ * row -- so the label is hand-drawn instead. On round there is no circle,
+ * so no gutter to reserve either; the three-word colour names live at the
+ * end of the rainbow where they still mostly fit, and ellipsize rather than
+ * clip if they do not.
  */
 
-static void option_draw_color_label(GContext *ctx, const Layer *cell_layer,
-                                    const OptionWindow *option_window, uint8_t row) {
+static void option_draw_label(GContext *ctx, const Layer *cell_layer,
+                              const OptionWindow *option_window, uint8_t row) {
   const GRect cell = layer_get_bounds(cell_layer);
   const char *label = option_window->labels[row];
 #ifdef PBL_ROUND
@@ -223,11 +249,16 @@ static void option_draw_color_label(GContext *ctx, const Layer *cell_layer,
     cell.size.w - OPTION_RECT_TEXT_LEFT_INSET - OPTION_RADIO_INSET, cell.size.h);
   const GTextAlignment align = GTextAlignmentLeft;
 #endif
+#ifdef PBL_ROUND
+  const int16_t line_h = option_line_pitch(font);
+#else
   const GSize used = graphics_text_layout_get_content_size(label, font, text_box,
                                                            GTextOverflowModeTrailingEllipsis,
                                                            align);
-  const GRect text = GRect(text_box.origin.x, (cell.size.h - used.h) / 2,
-                           text_box.size.w, used.h);
+  const int16_t line_h = used.h;
+#endif
+  const GRect text = GRect(text_box.origin.x, (cell.size.h - line_h) / 2,
+                           text_box.size.w, line_h);
   graphics_context_set_text_color(ctx, menu_cell_layer_is_highlighted(cell_layer) ?
                                   gcolor_legible_over(option_window->row_highlight) :
                                   GColorBlack);
@@ -237,44 +268,31 @@ static void option_draw_color_label(GContext *ctx, const Layer *cell_layer,
 
 
 /*
- * draw each row: on the colour screen just the label, elsewhere the option
- * label and its selection circle
+ * draw each row
+ *
+ * on rect: the plain settings get menu_cell_basic_draw's left label plus
+ * the selection circle, the colour screen just a hand-drawn label. On round
+ * every row is the hand-drawn centred label -- the right-aligned text with
+ * the circle parked at its end read as jarring beside the curved edge, so
+ * the colour screen's circle-less style is the window's one style there.
  */
 
 static void option_draw_row_callback(GContext *ctx, const Layer *cell_layer,
                                      MenuIndex *cell_index, void *context) {
   OptionWindow *option_window = (OptionWindow*)context;
   const uint8_t row = (uint8_t)cell_index->row;
-  const char *label = option_window->labels[row];
-
-  if (option_window->swatches != NULL) {
-    option_draw_color_label(ctx, cell_layer, option_window, row);
-    return;
-  }
 
 #ifdef PBL_ROUND
-  // Round centres text in menu_cell_basic_draw, which drives long labels like
-  // "Automatically" straight into the selection circle. The firmware hits the
-  // same problem and right-aligns instead, so do that.
-  const GRect cell = layer_get_bounds(cell_layer);
-  const GFont font = option_title_font(true);
-  const GRect text_box = GRect(OPTION_ROUND_TEXT_LEFT_INSET, 0,
-    cell.size.w - OPTION_RADIO_INSET - 2 * OPTION_RADIO_RADIUS - OPTION_RADIO_TEXT_GAP -
-      OPTION_ROUND_TEXT_LEFT_INSET, cell.size.h);
-  const GSize used = graphics_text_layout_get_content_size(label, font, text_box,
-                                                           GTextOverflowModeFill,
-                                                           GTextAlignmentRight);
-  const GRect text = GRect(text_box.origin.x, (cell.size.h - used.h) / 2,
-                           text_box.size.w, used.h);
-  graphics_context_set_text_color(ctx, menu_cell_layer_is_highlighted(cell_layer) ?
-                                  gcolor_legible_over(option_window->row_highlight) :
-                                  GColorBlack);
-  graphics_draw_text(ctx, label, font, text, GTextOverflowModeFill, GTextAlignmentRight, NULL);
+  option_draw_label(ctx, cell_layer, option_window, row);
+  return;
 #else
-  menu_cell_basic_draw(ctx, cell_layer, label, NULL, NULL);
-#endif
-
+  if (option_window->swatches != NULL) {
+    option_draw_label(ctx, cell_layer, option_window, row);
+    return;
+  }
+  menu_cell_basic_draw(ctx, cell_layer, option_window->labels[row], NULL, NULL);
   option_draw_radio(ctx, cell_layer, option_window, row);
+#endif
 }
 
 
@@ -325,7 +343,13 @@ static int16_t option_get_cell_height_callback(MenuLayer *menu_layer, MenuIndex 
   if (menu_layer_get_selected_index(menu_layer).row == cell_index->row) {
     return OPTION_CELL_HEIGHT_FOCUSED;
   }
-  return OPTION_CELL_HEIGHT;
+  // a one-line cell has to hold capital + descender ink, not just the line
+  // advance -- see option_line_pitch (issue: the cut-off g in "Bulgarian
+  // Rose" on the 28 px platforms; chalk's 32 px firmware metric was already
+  // a pixel or two short at 24 px)
+  const int16_t pitch = option_line_pitch(option_title_font(false));
+  const int16_t needed = pitch + OPTION_LINE_SLACK;
+  return (needed > OPTION_CELL_HEIGHT) ? needed : OPTION_CELL_HEIGHT;
 }
 #endif
 

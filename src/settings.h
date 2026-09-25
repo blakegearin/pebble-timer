@@ -32,6 +32,7 @@ typedef enum {
   SettingGroup,
   SettingStartTimers,
   SettingDelete,
+  SettingSnooze,
 #ifdef PBL_COLOR
   SettingColor,
 #endif

@@ -3,8 +3,9 @@
  *
  * DESCRIPTION :
  *      Create, destroy, and manage a reusable radio option window: a list of
- *      option labels with a selection circle on the current one, reproducing
- *      the look of the firmware's own option menus with public API.
+ *      option labels reproducing the look of the firmware's own option menus
+ *      with public API -- selection circles on rect, centred labels with the
+ *      committed option set bold on round.
  *
  * PUBLIC FUNCTIONS :
  *      OptionWindow  *option_window_create(OptionWindowSelectCallback
@@ -100,7 +101,8 @@ void option_window_destroy(OptionWindow *option_window);
  *  title: the window title -- on rect a section header, on round nothing
  *  labels: the option labels, one per row
  *  count: the number of labels
- *  selected: the option the list opens on, which carries the filled circle
+ *  selected: the option the list opens on; the committed one carries the
+ *      filled circle on rect and the bold label on round
  *  swatches: one colour per row, or NULL. when given, every row's circle
  *      carries that colour as a chip so the user can see each option before
  *      picking it -- this is what turns the radio list into a colour picker

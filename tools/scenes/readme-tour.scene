@@ -5,6 +5,7 @@
 #   tools/screenshots.sh -p basalt -w -o tmp/shots/readme tools/scenes/readme-tour.scene
 
 note 25-minute timer so the pin branch is live in the detail shot
+wait 4              # the app's first window needs to be up before presses land
 press select        # off hours
 press up 25         # twenty-five minutes
 press select        # off minutes

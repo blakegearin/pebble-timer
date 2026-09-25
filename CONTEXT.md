@@ -24,11 +24,13 @@ with `settings_window`. Do not reintroduce the collision.
 
 - **Duration** -- the length dialled in on the duration picker.
 - **Setting** -- one of the app's preferences (`Sort Order`, `Group`, `Start
-  Timers`, `Delete`, and -- on the colour platforms only -- `Accent Color`).
-  Named by `SettingId` in `settings.h`.
+  Timers`, `Delete`, `Snooze`, and -- on the colour platforms only -- `Accent
+  Color`). Named by `SettingId` in `settings.h`.
 - **Option** -- one choice within one setting (`Recency` / `Duration`).
-  Every setting has two options except `Accent Color`, whose options are the
-  sixty-four palette swatches in `s_color_values` in `main.c`.
+  Every setting has two options except `Snooze`, whose options are the six
+  delays plus `Off` in `s_snooze_options` in `main.c`, and `Accent Color`,
+  whose options are the sixty-four palette swatches in `s_color_values` in
+  `main.c`.
 - **Armed delete** -- the in-place confirm state on the detail window's action
   bar, not a separate confirmation screen.
 
@@ -47,7 +49,8 @@ A "timer index" in a `menu_window` signature is a **view** index.
 
 Six targets: `aplite` (Pebble/Pebble Steel), `basalt` (Time/Time Steel),
 `chalk` (Time Round), `diorite` (Pebble 2), `emery` (Time 2),
-`gabbro` (2 Duo, renamed from Core 2 Duo).
+`gabbro` (Round 2 -- colour and round, 260x260 per the SDK's platform table;
+the old "2 Duo / Core 2 Duo" label was wrong).
 
 The one line that matters: **aplite is the 24 KB platform, where compiled code
 lives in the same budget as data.** Adding a window there costs RAM even if it
